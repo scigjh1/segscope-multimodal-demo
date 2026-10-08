@@ -1,0 +1,382 @@
+// ---------------------------------------------------------------------------
+// Neutral wire shapes shared between the client and any backend. Same neutral
+// shapes everywhere: never a backend file id, a route, or a Girder `JobStatus`
+// enum.
+//
+// Two DIFFERENT fail-closed behaviors live here, on purpose:
+//   * an unknown task-spec field kind is REJECTED (task-spec.ts, negative
+//     fixture) — the client must not silently render a param it can't type;
+//   * a missing, unknown, or malformed result INTENT is ACCEPTED as an
+//     ordinary result record but carries no VolView state directive.
+// ---------------------------------------------------------------------------
+
+import { z } from 'zod';
+import {
+  typeTagSchema,
+  TYPE_TAG_ANNOTATIONS,
+  TYPE_TAG_LABELMAP,
+} from './task-spec';
+import { pathSegmentIdSchema } from './ids';
+
+// Names the intent vocabulary's shape in the OpenAPI text; never sent. An older
+// client demotes an unknown intent through `resultIntentSchema` below.
+export const INTENT_VOCABULARY_VERSION = 3;
+
+// ---------------------------------------------------------------------------
+// Input value: what the client sends at submit
+// ---------------------------------------------------------------------------
+
+// The bound input's value: verbatim provenance URIs plus a SEMANTIC type tag.
+// `type`/`format` are an open vocabulary (no closed server enum). `uris`
+// are the client's own opaque provenance URIs in sorted slice order (advisory),
+// and at least one is required — a bound input with no URIs is not a value
+// (the client never mints one, and the backend rejects it with a 400).
+export const inputValueSchema = z.object({
+  type: typeTagSchema,
+  format: z.string().optional(),
+  uris: z.array(z.string()).min(1),
+});
+
+export type InputValue = z.infer<typeof inputValueSchema>;
+
+// The typed descriptor that accompanies staged bytes. Staging creates a
+// resource bound to the image it overlays; the image value is the same neutral,
+// opaque-provenance shape used by ordinary task inputs.
+//
+// `referenceImage` stays REQUIRED for every stageable type: it is the access-
+// control linkage, the durable-reference check, and the one code path the
+// backend runs — a staged resource with no parent image has no owner.
+const stagedReferenceImageSchema = inputValueSchema
+  .extend({
+    type: z.literal('image'),
+    uris: z.array(z.string()).min(1),
+  })
+  .strict();
+
+const stagedDescriptorCommon = {
+  name: z.string().min(1),
+  referenceImage: stagedReferenceImageSchema,
+};
+
+// A parent-bound labelmap: the segmentation bytes overlaying the image.
+const stageLabelmapDescriptorSchema = z
+  .strictObject({
+    type: z.literal(TYPE_TAG_LABELMAP),
+    ...stagedDescriptorCommon,
+  })
+  .describe(
+    "The staged bytes are a `.seg.nrrd` labelmap on the reference image's voxel grid. Label values run from 1 to N within each file, in the client's segment order, with 0 as background. Voxels are unsigned 8-bit for up to 255 labels and unsigned 16-bit beyond. Segment names and colors ride in the header."
+  );
+
+// A parent-bound annotations file: the vector annotations (rulers, rectangles,
+// polygons) drawn on the image, as the `annotations.ts` interchange format.
+const stageAnnotationsDescriptorSchema = z.strictObject({
+  type: z.literal(TYPE_TAG_ANNOTATIONS),
+  ...stagedDescriptorCommon,
+});
+
+// The stageable types, discriminated by `type` over an IDENTICAL key set — a
+// new stageable type adds a member here and nothing else. An unknown `type` is
+// rejected: staging is fail-closed, unlike the open input-value type tag.
+export const stageInputDescriptorSchema = z.discriminatedUnion('type', [
+  stageLabelmapDescriptorSchema,
+  stageAnnotationsDescriptorSchema,
+]);
+
+export type StageInputDescriptor = z.infer<typeof stageInputDescriptorSchema>;
+
+// Read off the union above rather than restated, so the list a backend
+// enumerates and the schema it validates against cannot drift apart.
+export type StageableType = StageInputDescriptor['type'];
+export const STAGEABLE_TYPES: readonly StageableType[] =
+  stageInputDescriptorSchema.options.map((option) => option.shape.type.value);
+
+// ---------------------------------------------------------------------------
+// Neutral job status
+// ---------------------------------------------------------------------------
+
+// Exactly these five states, named to match what the backend projects and the
+// client store consumes at runtime (`pending | running | success | error |
+// cancelled`): typical backend job lifecycles map onto these with no translation
+// layer, so the producer and the consumer already agree. `cancelled` is present
+// so cancel needs no wire change; the terminal states (`success | error |
+// cancelled`) also carry the born-terminal sync fast-path at zero cost.
+export const JOB_STATES = [
+  'pending',
+  'running',
+  'success',
+  'error',
+  'cancelled',
+] as const;
+export type JobState = (typeof JOB_STATES)[number];
+
+export const jobStateSchema = z.enum(JOB_STATES);
+
+export const RESULT_STATES = [
+  'waiting',
+  'ready',
+  'incomplete',
+  'unavailable',
+] as const;
+export type ResultState = (typeof RESULT_STATES)[number];
+
+export const resultStateSchema = z.enum(RESULT_STATES);
+
+const neutralJobStatusBaseSchema = z.object({
+  jobId: pathSegmentIdSchema,
+  progress: z.number().optional(),
+  errorTail: z.string().optional(),
+});
+
+export const neutralJobStatusSchema = z.discriminatedUnion('state', [
+  neutralJobStatusBaseSchema.extend({
+    state: z.literal('pending'),
+    resultState: z.literal('waiting'),
+  }),
+  neutralJobStatusBaseSchema.extend({
+    state: z.literal('running'),
+    resultState: z.literal('waiting'),
+  }),
+  neutralJobStatusBaseSchema.extend({
+    state: z.literal('success'),
+    resultState: z.enum(['ready', 'incomplete']),
+  }),
+  neutralJobStatusBaseSchema.extend({
+    state: z.literal('error'),
+    resultState: z.literal('unavailable'),
+  }),
+  neutralJobStatusBaseSchema.extend({
+    state: z.literal('cancelled'),
+    resultState: z.literal('unavailable'),
+  }),
+]);
+
+export type NeutralJobStatus = z.infer<typeof neutralJobStatusSchema>;
+
+// ---------------------------------------------------------------------------
+// Result-intent vocabulary
+// ---------------------------------------------------------------------------
+
+// The state directives the applier understands.
+export const RESULT_INTENTS = [
+  'add-base-image',
+  'add-layer',
+  'import-segmentation',
+  'add-annotations',
+] as const;
+export type ResultIntentName = (typeof RESULT_INTENTS)[number];
+
+// Names an earlier vocabulary gave an intent whose shape has not changed since.
+// A client reads one as its current name, so a producer still on the old
+// vocabulary keeps applying and the two sides need not deploy in lockstep.
+// A Map, so a wire string naming an Object.prototype key resolves to nothing.
+export const LEGACY_RESULT_INTENT_NAMES: ReadonlyMap<string, ResultIntentName> =
+  new Map([['add-segment-group', 'import-segmentation']]);
+
+export const currentResultIntentName = (intent: unknown) =>
+  (typeof intent === 'string' && LEGACY_RESULT_INTENT_NAMES.get(intent)) ||
+  intent;
+
+// Provenance tag on a result: the durable idempotency identity the client
+// preserves on generated scene state so restored results can be recognized.
+export const resultSourceSchema = z.object({
+  providerId: z.string(),
+  jobId: z.string(),
+  outputId: z.string(),
+});
+export type ResultSource = z.infer<typeof resultSourceSchema>;
+
+const colorChannel = z.number().int().min(0).max(255);
+
+// A segment descriptor: `value` is a label index >= 1 (0 is reserved
+// background), `color` is RGBA 0-255.
+export const segmentDescriptorSchema = z.object({
+  value: z
+    .number()
+    .int()
+    .min(1)
+    .describe(
+      'The label value, from 1 to 65535; 0 is background. The client stores labels in at most 16 bits: voxels holding a larger value import as background with a warning, and a segment declared with one arrives empty.'
+    ),
+  name: z
+    .string()
+    .describe(
+      'Binds the segment by exact name. A segment the client already holds under this name, with no mask on the target image yet, takes these voxels and keeps its own color and visibility. Otherwise the client creates a segment from this descriptor, with a numbered name when the existing one already has a mask on that image.'
+    ),
+  color: z.tuple([colorChannel, colorChannel, colorChannel, colorChannel]),
+  visible: z.boolean().optional(),
+});
+export type SegmentDescriptor = z.infer<typeof segmentDescriptorSchema>;
+
+// The ONE canonical result-list-item shape, shared by every producer, the
+// client, the generated OpenAPI, the fixtures, and the backend copy. `id` is the
+// display key, unique within the job (required, nonempty); `name`/`url` are
+// required; `mimeType`/`size` are advisory file metadata that may be null. Every
+// intent branch is built FROM this shape, so there is no payload the contract
+// accepts but the client rejects.
+export const resultListItemSchema = z.object({
+  id: z.string().min(1),
+  name: z.string(),
+  url: z.string(),
+  mimeType: z.string().nullish(),
+  size: z.number().nonnegative().nullish(),
+});
+export type ResultListItem = z.infer<typeof resultListItemSchema>;
+
+// The known intents are built from the common result-item shape.
+// `.passthrough()` keeps an unrecognized extra producer field on a KNOWN intent
+// (it survives round-trip but gains no behavior).
+const addBaseImage = z
+  .object({
+    intent: z.literal('add-base-image'),
+    ...resultListItemSchema.shape,
+  })
+  .passthrough();
+
+const addLayer = z
+  .object({ intent: z.literal('add-layer'), ...resultListItemSchema.shape })
+  .passthrough();
+
+// `import-segmentation` carries OPTIONAL `segments` (the bare-labelmap +
+// labels-sidecar case; a `seg.nrrd` with embedded metadata carries none — the
+// client uses `segments` when present, else the file's own metadata) and an
+// optional `source` provenance tag (the idempotency key).
+const importSegmentation = z
+  .object({
+    intent: z.literal('import-segmentation'),
+    ...resultListItemSchema.shape,
+    segments: z.array(segmentDescriptorSchema).optional(),
+    source: resultSourceSchema.optional(),
+  })
+  .passthrough();
+
+// `add-annotations` points at an `annotations.ts` interchange file: the vector
+// annotations to add to the referenced image. It carries NO `segments`
+// equivalent — the label namespaces ride inside the file itself — plus the same
+// optional `source` provenance tag used as the idempotency key.
+const addAnnotations = z
+  .object({
+    intent: z.literal('add-annotations'),
+    ...resultListItemSchema.shape,
+    source: resultSourceSchema.optional(),
+  })
+  .passthrough();
+
+// The STRICT half of the vocabulary: every declared state directive with its
+// declared shape. Exported so the single applier can gate on which union member
+// strictly matched — a name-known-but-shape-invalid result (e.g. a broken
+// `segments`) carries no state directive rather than being applied as valid.
+export const knownResultIntentSchema = z.discriminatedUnion('intent', [
+  addBaseImage,
+  addLayer,
+  importSegmentation,
+  addAnnotations,
+]);
+
+export type KnownResultIntent = z.infer<typeof knownResultIntentSchema>;
+
+// The ordinary-result branch: missing, unknown, and malformed intent values
+// still preserve the full result row (id/name/url required), but the client
+// performs no state action. `.catchall` keeps any extra producer fields without
+// interpreting them.
+const unknownIntent = z
+  .object({
+    intent: z.unknown().optional(),
+    ...resultListItemSchema.shape,
+  })
+  .catchall(z.unknown());
+
+export const resultIntentSchema = z.union([
+  knownResultIntentSchema,
+  unknownIntent,
+]);
+
+export type ResultIntent = z.infer<typeof resultIntentSchema>;
+
+// ---------------------------------------------------------------------------
+// Complete personal job history
+// ---------------------------------------------------------------------------
+
+export const jobHistorySummarySchema = z
+  .object({
+    jobId: pathSegmentIdSchema,
+    taskId: pathSegmentIdSchema,
+    taskTitle: z.string(),
+    createdBy: z.object({ id: z.string(), name: z.string() }),
+    createdAt: z.string(),
+    startedAt: z.string().optional(),
+    finishedAt: z.string().optional(),
+    state: jobStateSchema,
+    resultState: resultStateSchema,
+    progress: z.number().min(0).max(1).optional(),
+    outputSummary: z
+      .object({
+        recorded: z.number().int().nonnegative(),
+        missing: z.number().int().nonnegative(),
+      })
+      .optional(),
+  })
+  .superRefine((summary, context) => {
+    const lifecycle = neutralJobStatusSchema.safeParse({
+      jobId: summary.jobId,
+      state: summary.state,
+      resultState: summary.resultState,
+    });
+    if (!lifecycle.success) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['resultState'],
+        message: `resultState ${summary.resultState} is invalid for ${summary.state}`,
+      });
+    }
+  });
+
+export type JobHistorySummary = z.infer<typeof jobHistorySummarySchema>;
+
+export const jobHistoryPageSchema = z.object({
+  jobs: z.array(jobHistorySummarySchema),
+  nextCursor: z.string().nullable(),
+});
+
+export type JobHistoryPage = z.infer<typeof jobHistoryPageSchema>;
+
+export const jobHistoryDetailSchema = z.object({
+  jobId: pathSegmentIdSchema,
+  log: z.array(z.string()),
+  parameters: z.record(z.string(), z.unknown()),
+});
+
+export type JobHistoryDetail = z.infer<typeof jobHistoryDetailSchema>;
+
+// ---------------------------------------------------------------------------
+// Result-read payloads
+// ---------------------------------------------------------------------------
+
+// A successful results read: the resolved intents plus a count of outputs the
+// backend could not resolve (deleted files, etc.). `missing` is reported rather
+// than silently dropped, so "succeeded with no outputs" stays distinguishable
+// from "outputs deleted".
+export const jobResultsSchema = z.object({
+  resultState: z.enum(['ready', 'incomplete']),
+  intents: z.array(resultIntentSchema),
+  missing: z.number().int().nonnegative(),
+});
+export type JobResults = z.infer<typeof jobResultsSchema>;
+
+// The explicit error the backend returns for a non-succeeded job, so the client
+// never mistakes a failed/running read for empty results.
+export const jobResultsErrorSchema = z.discriminatedUnion('code', [
+  z.object({
+    code: z.literal('results_not_ready'),
+    message: z.string(),
+    state: z.enum(['pending', 'running']),
+    resultState: z.literal('waiting'),
+  }),
+  z.object({
+    code: z.literal('results_unavailable'),
+    message: z.string(),
+    state: z.enum(['error', 'cancelled']),
+    resultState: z.literal('unavailable'),
+  }),
+]);
+export type JobResultsError = z.infer<typeof jobResultsErrorSchema>;

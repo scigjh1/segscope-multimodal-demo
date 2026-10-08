@@ -1,0 +1,95 @@
+import { EPSILON } from '@/src/constants';
+import { areEquals } from '@kitware/vtk.js/Common/Core/Math';
+import vtkImageData from '@kitware/vtk.js/Common/DataModel/ImageData';
+import type { Vector3 } from '@kitware/vtk.js/types';
+import { vec3 } from 'gl-matrix';
+
+// give more fp tolerance due to transforms
+const RELAXED_EPSILON = EPSILON * 1e2;
+
+function getImageWorldCorners(im: vtkImageData) {
+  const extent = im.getExtent();
+  const worldCorners: Vector3[] = [];
+  for (let i = 0; i < 2; i++) {
+    for (let j = 0; j < 2; j++) {
+      for (let k = 0; k < 2; k++) {
+        worldCorners.push(
+          im.indexToWorld([extent[i], extent[2 + j], extent[4 + k]]) as Vector3
+        );
+      }
+    }
+  }
+  return worldCorners;
+}
+
+/**
+ * Determines if two images occupy the same space.
+ *
+ * This will produce invalid results under certain scenarios:
+ * - image direction matrices are not invertible
+ * @param im1
+ * @param im2
+ */
+export function compareImageSpaces(
+  im1: vtkImageData,
+  im2: vtkImageData,
+  eps = RELAXED_EPSILON
+) {
+  const corners1 = getImageWorldCorners(im1);
+  const corners2 = getImageWorldCorners(im2);
+  return corners1.every((p1) => corners2.some((p2) => areEquals(p1, p2, eps)));
+}
+
+export function compareImageIndexGrids(
+  im1: vtkImageData,
+  im2: vtkImageData,
+  eps = RELAXED_EPSILON
+) {
+  const extent1 = im1.getExtent();
+  const extent2 = im2.getExtent();
+  if (
+    !extent1.every((value, index) => value === extent2[index]) ||
+    !areEquals([...im1.getIndexToWorld()], [...im2.getIndexToWorld()], eps)
+  ) {
+    return false;
+  }
+
+  // Small matrix differences can accumulate into significant voxel displacement.
+  const corners1 = getImageWorldCorners(im1);
+  const corners2 = getImageWorldCorners(im2);
+  return corners1.every((point, index) =>
+    areEquals(point, corners2[index], eps)
+  );
+}
+
+// Negative spacing stays usable because its sign places the voxels.
+export const isUsableSpacing = (value: number) =>
+  Number.isFinite(value) && value !== 0;
+
+// Returns the declared spacing when a repair was needed, otherwise null.
+export function repairUnusableSpacing(image: vtkImageData) {
+  const declared = image.getSpacing();
+  if (declared.every(isUsableSpacing)) return null;
+  image.setSpacing(
+    declared.map((value) => (isUsableSpacing(value) ? value : 1))
+  );
+  return declared;
+}
+
+/**
+ * Convert a world point to image index space.
+ */
+export function worldPointToIndex(image: vtkImageData, worldPoint: vec3): vec3 {
+  const indexPoint = vec3.create();
+  vec3.transformMat4(indexPoint, worldPoint, image.getWorldToIndex());
+  return indexPoint;
+}
+
+/**
+ * Convert an image index point to world space.
+ */
+export function indexPointToWorld(image: vtkImageData, indexPoint: vec3): vec3 {
+  const worldPoint = vec3.create();
+  vec3.transformMat4(worldPoint, indexPoint, image.getIndexToWorld());
+  return worldPoint;
+}

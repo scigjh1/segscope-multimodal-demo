@@ -1,8 +1,26 @@
-# SegScope · 图像分割实验工作台
+# SegScope · 医学影像分割工作台
 
-![实际合成样例页面](docs/screenshots/workbench.jpg)
+界面基于 [Kitware VolView](https://github.com/Kitware/VolView) v4.5.2 的完整应用源码，保留原版阅片布局、三视图、3D 体绘制、标注与测量工具；仅增加本地 GPU 推理和 SegBench 入口。
 
-现有个人算法工程的公共 Demo 版本，由 AI 工具辅助整理；公开通用流程与评测接口，研究模型可通过本机私有适配器连接。
+![VolView 实际工作台；显示程序生成的几何样例](docs/screenshots/volview-workbench.jpg)
+
+## 新版界面
+
+使用 Node 22.12+（本次验证 Node 24.19），按顺序执行：
+
+```bash
+cd web/volview
+npm ci
+npm run build
+cd ../..
+python scripts/serve_workbench.py --port 4200 --runtime http://127.0.0.1:4186
+```
+
+打开 http://127.0.0.1:4200 。阅片器可直接加载本地影像；默认展示程序生成的几何 NRRD 样例。GPU 推理连接独立配置的本地服务，见 [运行说明](docs/GPU_RUNTIME.md)。模型源码、适配器、权重及病例数据留在仓库外。
+
+[界面来源与修改范围](docs/VOLVIEW_SOURCE.md) · [GPU 原始测量](docs/MEASUREMENTS.md)
+
+## 原有二维实验流程
 
 ## 功能
 

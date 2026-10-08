@@ -1,0 +1,92 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "oneOf": [
+    {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "labelmap"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "referenceImage": {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "image"
+            },
+            "format": {
+              "type": "string"
+            },
+            "uris": {
+              "minItems": 1,
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "required": [
+            "type",
+            "uris"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "type",
+        "name",
+        "referenceImage"
+      ],
+      "additionalProperties": false,
+      "description": "The staged bytes are a `.seg.nrrd` labelmap on the reference image's voxel grid. Label values run from 1 to N within each file, in the client's segment order, with 0 as background. Voxels are unsigned 8-bit for up to 255 labels and unsigned 16-bit beyond. Segment names and colors ride in the header."
+    },
+    {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "annotations"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "referenceImage": {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "image"
+            },
+            "format": {
+              "type": "string"
+            },
+            "uris": {
+              "minItems": 1,
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "required": [
+            "type",
+            "uris"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "type",
+        "name",
+        "referenceImage"
+      ],
+      "additionalProperties": false
+    }
+  ]
+}

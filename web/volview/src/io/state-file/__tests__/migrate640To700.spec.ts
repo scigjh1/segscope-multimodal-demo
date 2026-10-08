@@ -1,0 +1,1204 @@
+import { beforeEach, describe, expect, it } from 'vitest';
+import { setActivePinia, createPinia } from 'pinia';
+import { nextTick } from 'vue';
+
+import { ManifestSchema } from '@/src/io/state-file/schema';
+import { migrateManifest } from '@/src/io/state-file/migrations';
+import { MANIFEST_VERSION } from '@/src/io/state-file/serialize';
+import { leafStateId } from '@/src/io/import/dataSource';
+import { completeStateFileRestore } from '@/src/io/import/processors/restoreStateFile';
+import { useSegmentationStore } from '@/src/segmentation/store';
+import { useSegmentStore } from '@/src/segmentation/segments';
+import { DEFAULT_SEGMENTATION_DISPLAY } from '@/src/segmentation/model';
+import { segmentFillAlpha } from '@/src/segmentation/rendering/display';
+import { cssColorToRGBA } from '@/src/segmentation/color';
+import { TOOL_COLORS } from '@/src/config';
+import { usePolygonStore } from '@/src/store/tools/polygons';
+import {
+  legacyAxialViewConfig,
+  seatImage,
+  SPEC_DIMENSIONS,
+  SPEC_VOXEL_COUNT,
+  inMemoryArtifactIO,
+  manifestForImages,
+  segmentationSnapshot,
+  serializeToStateFiles,
+} from '@/src/segmentation/__tests__/segmentMaskFixtures';
+
+// ---------------------------------------------------------------------------
+// The 6.4.0 -> 7.0.0 structural migration. JSON only: every old segment group
+// becomes one `SegmentationArtifact`, every `{group, value}` becomes one
+// segment plus one per-image mask, and every old tool label becomes one
+// segment in the one registry that now backs paint and the vector tools. A
+// tool label lands on the segment of the same name; groups never merge with
+// each other, whatever they are called.
+// ---------------------------------------------------------------------------
+
+const SOURCE = {
+  providerId: 'analysis-provider',
+  jobId: 'job-abc',
+  outputId: 'outputLabelmap',
+};
+
+const legacyManifest = (overrides: Record<string, unknown>) =>
+  JSON.stringify({
+    version: '6.4.0',
+    dataSources: [
+      { id: 1, type: 'uri', uri: 'https://ex/ct.nrrd', name: 'CT' },
+      { id: 2, type: 'uri', uri: 'https://ex/mr.nrrd', name: 'MR' },
+    ],
+    datasets: [
+      { id: 'ds-ct', dataSourceId: 1 },
+      { id: 'ds-mr', dataSourceId: 2 },
+    ],
+    ...overrides,
+  });
+
+const migrate = (overrides: Record<string, unknown>) =>
+  migrateManifest(legacyManifest(overrides)) as any;
+
+type LegacyMask = {
+  value: number;
+  name: string;
+  color: [number, number, number, number];
+  visible?: boolean;
+  locked?: boolean;
+};
+
+const segmentsBlock = (masks: LegacyMask[]) => ({
+  order: masks.map((mask) => mask.value),
+  byValue: Object.fromEntries(masks.map((mask) => [String(mask.value), mask])),
+});
+
+const legacyGroup = (
+  id: string,
+  parentImage: string,
+  masks?: LegacyMask[],
+  extras: Record<string, unknown> = {}
+) => ({
+  id,
+  path: `segmentations/${id}.vti`,
+  metadata: {
+    name: id,
+    parentImage,
+    ...(masks ? { segments: segmentsBlock(masks) } : {}),
+    ...extras,
+  },
+});
+
+const TUMOR: LegacyMask = {
+  value: 1,
+  name: 'Tumor',
+  color: [255, 0, 0, 255],
+  visible: true,
+  locked: true,
+};
+const EDEMA: LegacyMask = {
+  value: 2,
+  name: 'Edema',
+  color: [0, 255, 0, 128],
+  visible: false,
+};
+// No `visible`/`locked` keys at all: the old schema defaulted them on parse.
+const BARE = { value: 3, name: '', color: [1, 2, 3, 4] } as LegacyMask;
+
+// What the slice renderer multiplies out for a visible, opaque-colored
+// segment: the segment's fill opacity times the image's multiplier. A legacy
+// group's opacity has to survive as this product, not as either factor alone.
+const effectiveFill = (migrated: any, record: any, segmentation: any) =>
+  segmentFillAlpha(
+    {
+      visible: true,
+      color: [0, 0, 0, 255],
+      fillOpacity: wireSegmentOf(migrated, record)?.fillOpacity ?? 1,
+    } as any,
+    segmentation.fillOpacity
+  );
+
+const segmentationFor = (migrated: any, parentImage: string) =>
+  migrated.segmentations.find(
+    (entry: any) => entry.parentImage === parentImage
+  );
+
+const wireSegmentOf = (migrated: any, mask: any) =>
+  migrated.segments.find((segment: any) => segment.id === mask.segmentId);
+
+const namedMasks = (migrated: any, segmentation: any) =>
+  orderedMasks(segmentation).map((mask: any) => ({
+    ...mask,
+    segment: wireSegmentOf(migrated, mask),
+  }));
+
+const orderedMasks = (segmentation: any) =>
+  segmentation.order.map((id: string) =>
+    segmentation.masks.find((mask: any) => mask.id === id)
+  );
+
+const boundTo = (segmentation: any, artifactId: string, sourceValue: number) =>
+  orderedMasks(segmentation).find(
+    (mask: any) =>
+      mask.representations.labelmap?.artifactId === artifactId &&
+      mask.representations.labelmap?.sourceValue === sourceValue
+  );
+
+describe('migrate640To700: structural stage', () => {
+  it('keeps colliding legacy identifiers as distinct segments', () => {
+    const migrated = migrate({
+      segmentGroups: [
+        legacyGroup('polygons', 'ds-ct', [
+          { value: 1, name: 'Voxels', color: [1, 2, 3, 255] },
+        ]),
+      ],
+      tools: {
+        polygons: {
+          labels: { '1': { labelName: 'Vector', color: '#00ff00' } },
+          tools: [{ id: 't1', label: '1', imageID: 'ds-ct' }],
+        },
+      },
+    });
+
+    const segmentIds = migrated.segments.map((segment: any) => segment.id);
+    // Both sources interpolate to 'polygons-1'; the second is suffixed.
+    expect(segmentIds).toEqual(['polygons-1', 'polygons-1-2']);
+    expect(migrated.tools.polygons.tools[0].segmentId).toBe('polygons-1-2');
+    // The record that group became keeps an id of its own.
+    expect(migrated.segmentations[0].masks[0].segmentId).toBe('polygons-1');
+  });
+
+  it.each(['5.0.1', '6.0.0', '6.1.0', '6.1.1', '6.2.0', '6.3.0', '6.4.0'])(
+    'reaches the current manifest version from %s',
+    (version) => {
+      const migrated = migrateManifest(
+        JSON.stringify({ version, dataSources: [] })
+      ) as any;
+      expect(migrated.version).toBe(MANIFEST_VERSION);
+    }
+  );
+
+  it('migrates a one-group manifest losslessly', () => {
+    const migrated = migrate({
+      segmentGroups: [
+        legacyGroup('sg-1', 'ds-ct', [TUMOR, EDEMA, BARE], {
+          name: 'Painted',
+          source: SOURCE,
+        }),
+      ],
+    });
+
+    expect(migrated.version).toBe(MANIFEST_VERSION);
+    expect(migrated.segmentGroups).toBeUndefined();
+
+    expect(migrated.segmentationArtifacts).toHaveLength(1);
+    expect(migrated.segmentationArtifacts[0]).toMatchObject({
+      id: 'sg-1',
+      parentImage: 'ds-ct',
+      name: 'Painted',
+      path: 'segmentations/sg-1.vti',
+      source: SOURCE,
+    });
+
+    expect(migrated.segmentations).toHaveLength(1);
+    const segmentation = migrated.segmentations[0];
+    expect(segmentation.parentImage).toBe('ds-ct');
+    expect(segmentation.order).toHaveLength(3);
+
+    const masks = namedMasks(migrated, segmentation);
+    expect(
+      masks.map((mask: any) => ({
+        name: mask.segment.name,
+        color: mask.segment.color,
+        visible: mask.segment.visible,
+        locked: mask.segment.locked,
+        sourceValue: mask.representations.labelmap.sourceValue,
+        artifactId: mask.representations.labelmap.artifactId,
+      }))
+    ).toEqual([
+      {
+        name: 'Tumor',
+        color: [255, 0, 0, 255],
+        visible: true,
+        locked: true,
+        sourceValue: 1,
+        artifactId: 'sg-1',
+      },
+      {
+        name: 'Edema',
+        color: [0, 255, 0, 128],
+        visible: false,
+        locked: false,
+        sourceValue: 2,
+        artifactId: 'sg-1',
+      },
+      {
+        name: '',
+        color: [1, 2, 3, 4],
+        visible: true,
+        locked: false,
+        sourceValue: 3,
+        artifactId: 'sg-1',
+      },
+    ]);
+    // The extent is a placeholder resolved against the parent at load time.
+    masks.forEach((mask: any) =>
+      expect(mask.representations.labelmap.extent).toHaveLength(6)
+    );
+
+    const parsed = ManifestSchema.parse(migrated);
+    // Parse fills the 7.0.0 display-state defaults the raw migration output
+    // does not carry; add those to the raw output before checking the
+    // migration itself is otherwise lossless.
+    const expectedSegmentations = migrated.segmentations.map((wire: any) => ({
+      ...wire,
+      ...DEFAULT_SEGMENTATION_DISPLAY,
+    }));
+    expect(parsed.segmentations).toEqual(expectedSegmentations);
+    expect(parsed.segments).toEqual(migrated.segments);
+    expect(parsed.segmentationArtifacts![0]).toMatchObject({ id: 'sg-1' });
+  });
+
+  it.each(['6.3.0', '6.4.0'])(
+    "preserves a path-less group's dataSourceId from %s",
+    (version) => {
+      const migrated = migrate({
+        version,
+        segmentGroups: [
+          {
+            id: 'sg-1',
+            dataSourceId: 7,
+            metadata: { name: 'Painted', parentImage: 'ds-ct' },
+          },
+        ],
+      });
+
+      expect(migrated.segmentationArtifacts[0]).toMatchObject({
+        id: 'sg-1',
+        dataSourceId: 7,
+      });
+      expect(migrated.segmentationArtifacts[0].path).toBeUndefined();
+      expect(() => ManifestSchema.parse(migrated)).not.toThrow();
+    }
+  );
+
+  it('keeps multi-group order deterministic', () => {
+    const migrated = migrate({
+      segmentGroups: [
+        legacyGroup('sg-a', 'ds-ct', [TUMOR]),
+        legacyGroup('sg-b', 'ds-ct', [EDEMA]),
+        legacyGroup('sg-c', 'ds-mr', [TUMOR]),
+      ],
+    });
+
+    expect(
+      migrated.segmentationArtifacts.map((artifact: any) => artifact.id)
+    ).toEqual(['sg-a', 'sg-b', 'sg-c']);
+    expect(
+      migrated.segmentations.map((entry: any) => entry.parentImage)
+    ).toEqual(['ds-ct', 'ds-mr']);
+
+    const ct = segmentationFor(migrated, 'ds-ct');
+    expect(
+      namedMasks(migrated, ct).map((mask: any) => [
+        mask.segment.name,
+        mask.representations.labelmap.artifactId,
+      ])
+    ).toEqual([
+      ['Tumor', 'sg-a'],
+      ['Edema', 'sg-b'],
+    ]);
+  });
+
+  it('keeps equal and default names distinct segments', () => {
+    const sameName: LegacyMask = {
+      value: 1,
+      name: 'Segment 1',
+      color: [10, 20, 30, 255],
+      visible: true,
+    };
+    const migrated = migrate({
+      segmentGroups: [
+        legacyGroup('sg-a', 'ds-ct', [sameName]),
+        legacyGroup('sg-b', 'ds-ct', [sameName]),
+      ],
+    });
+
+    const ct = segmentationFor(migrated, 'ds-ct');
+    const masks = namedMasks(migrated, ct);
+    expect(masks.map((mask: any) => mask.segment.name)).toEqual([
+      'Segment 1',
+      'Segment 1',
+    ]);
+    expect(new Set(masks.map((mask: any) => mask.id)).size).toBe(2);
+    // One segment per legacy segment: an equal name is not the same identity.
+    expect(new Set(masks.map((mask: any) => mask.segmentId)).size).toBe(2);
+    expect(
+      masks.map((mask: any) => mask.representations.labelmap.artifactId)
+    ).toEqual(['sg-a', 'sg-b']);
+  });
+
+  it('lands a tool label on the segment a group of that name already is', () => {
+    const migrated = migrate({
+      segmentGroups: [legacyGroup('sg-a', 'ds-ct', [TUMOR])],
+      tools: {
+        rectangles: {
+          tools: [
+            {
+              imageID: 'ds-ct',
+              slice: 2,
+              frameOfReference: {
+                planeOrigin: [0, 0, 2],
+                planeNormal: [0, 0, 1],
+              },
+              firstPoint: [1, 1, 2],
+              secondPoint: [4, 4, 2],
+              label: 'lbl-tumor',
+            },
+          ],
+          labels: {
+            'lbl-tumor': { labelName: 'Tumor', color: 'blue', strokeWidth: 3 },
+          },
+        },
+      },
+    });
+
+    const painted = wireSegmentOf(
+      migrated,
+      orderedMasks(segmentationFor(migrated, 'ds-ct'))[0]
+    );
+    expect(migrated.segments.map((segment: any) => segment.name)).toEqual([
+      'Tumor',
+    ]);
+    expect(migrated.tools.rectangles.tools[0].segmentId).toBe(painted.id);
+    // The group spoke for the name first, so the label brings no appearance.
+    expect(painted.color).toEqual(TUMOR.color);
+    expect(painted.strokeWidth).toBeUndefined();
+    expect(() => ManifestSchema.parse(migrated)).not.toThrow();
+  });
+
+  it('treats inherited property names and label ids as literal keys', () => {
+    const inheritedName = {
+      ...TUMOR,
+      name: 'constructor',
+    };
+    const polygon = (label: string, slice: number) => ({
+      imageID: 'ds-ct',
+      frameOfReference: {
+        planeOrigin: [0, 0, slice],
+        planeNormal: [0, 0, 1],
+      },
+      slice,
+      label,
+      points: [
+        [1, 1, slice],
+        [3, 1, slice],
+        [2, 3, slice],
+      ],
+    });
+    const migrated = ManifestSchema.parse(
+      migrate({
+        segmentGroups: [legacyGroup('sg-a', 'ds-ct', [inheritedName])],
+        tools: {
+          polygons: {
+            tools: [polygon('constructor', 1), polygon('__proto__', 2)],
+            labels: {
+              constructor: { labelName: 'constructor', color: 'blue' },
+              ['__proto__']: { labelName: 'Prototype', color: 'green' },
+              toString: { labelName: 'toString', color: 'red' },
+            },
+          },
+        },
+      })
+    ) as any;
+
+    const painted = wireSegmentOf(
+      migrated,
+      orderedMasks(segmentationFor(migrated, 'ds-ct'))[0]
+    );
+    expect(migrated.tools.polygons.tools[0].segmentId).toBe(painted.id);
+    expect(painted.color).toEqual(inheritedName.color);
+    expect(migrated.tools.polygons.tools[1].segmentId).toBe(
+      migrated.segments.find((segment: any) => segment.name === 'Prototype').id
+    );
+    expect(migrated.segments.map((segment: any) => segment.name)).toEqual([
+      'constructor',
+      'Prototype',
+      'toString',
+    ]);
+  });
+
+  // Two masks of one segment on one image is a state the app cannot hold, and two
+  // images that painted "Tumor" separately each described their own thing.
+  it('keeps a name two groups carry on separate segments', () => {
+    const migrated = migrate({
+      segmentGroups: [
+        legacyGroup('sg-a', 'ds-ct', [TUMOR]),
+        legacyGroup('sg-b', 'ds-mr', [TUMOR]),
+      ],
+    });
+
+    expect(migrated.segments.map((segment: any) => segment.name)).toEqual([
+      'Tumor',
+      'Tumor',
+    ]);
+    expect(
+      new Set(migrated.segments.map((segment: any) => segment.id)).size
+    ).toBe(2);
+  });
+
+  it('emits an artifact but no segments for a descriptorless group', () => {
+    const migrated = migrate({
+      segmentGroups: [legacyGroup('sg-blind', 'ds-ct')],
+    });
+
+    expect(migrated.segmentationArtifacts).toHaveLength(1);
+    expect(migrated.segmentationArtifacts[0]).toMatchObject({
+      id: 'sg-blind',
+      parentImage: 'ds-ct',
+    });
+    expect(
+      (migrated.segmentations ?? []).flatMap((entry: any) => entry.masks)
+    ).toEqual([]);
+  });
+
+  it('carries the active value of a descriptorless group for post-decode restore', () => {
+    const migrated = migrate({
+      segmentGroups: [legacyGroup('sg-blind', 'ds-ct')],
+      tools: { paint: { activeSegmentGroupID: 'sg-blind', activeSegment: 2 } },
+    });
+
+    // No segment exists to activate yet, so the value travels on the artifact.
+    expect(
+      (migrated.segmentations ?? []).flatMap((entry: any) => entry.masks)
+    ).toEqual([]);
+    expect(migrated.segmentationArtifacts[0].pendingActiveValue).toBe(2);
+
+    const parsed = ManifestSchema.parse(migrated) as any;
+    expect(parsed.segmentationArtifacts[0].pendingActiveValue).toBe(2);
+  });
+
+  it('does not emit a pending active value for a legacy null selection', () => {
+    const migrated = migrate({
+      segmentGroups: [legacyGroup('sg-blind', 'ds-ct')],
+      tools: {
+        paint: { activeSegmentGroupID: 'sg-blind', activeSegment: null },
+      },
+    });
+
+    expect(
+      migrated.segmentationArtifacts[0].pendingActiveValue
+    ).toBeUndefined();
+    expect(() => ManifestSchema.parse(migrated)).not.toThrow();
+  });
+
+  it('moves legacy group display settings onto the segment model', () => {
+    const migrated = migrate({
+      segmentGroups: [legacyGroup('sg-1', 'ds-ct', [TUMOR])],
+      viewByID: {
+        Axial: {
+          config: {
+            'sg-1': {
+              layers: { blendConfig: { opacity: 0.4, visibility: false } },
+              segmentGroup: { outlineOpacity: 0.25, outlineThickness: 5 },
+            },
+          },
+        },
+      },
+    });
+
+    const segmentation = segmentationFor(migrated, 'ds-ct');
+    const [record] = orderedMasks(segmentation);
+    // A legacy group described what it showed, so both land on its segment.
+    expect(wireSegmentOf(migrated, record)).toMatchObject({
+      visible: false,
+      outlineOpacity: 0.25,
+    });
+    expect(effectiveFill(migrated, record, segmentation)).toBeCloseTo(0.4);
+    expect(segmentation.outlineThickness).toBe(5);
+    // The artifact carries it too, for any value the descriptors missed.
+    expect(migrated.segmentationArtifacts[0]).toMatchObject({
+      pendingFillOpacity: 1,
+      pendingOutlineOpacity: 0.25,
+      pendingVisibility: false,
+    });
+    expect(migrated.viewByID.Axial.config['sg-1']).toBeUndefined();
+  });
+
+  // A group with no descriptors names no segment, so nothing holds its display
+  // until the restore decodes its voxels; it rides on the artifact until then.
+  it('carries a descriptor-less group display on the artifact', () => {
+    const migrated = migrate({
+      segmentGroups: [legacyGroup('sg-1', 'ds-ct')],
+      viewByID: {
+        Axial: {
+          config: {
+            'sg-1': {
+              layers: { blendConfig: { opacity: 0.4, visibility: false } },
+              segmentGroup: { outlineOpacity: 0.25, outlineThickness: 5 },
+            },
+          },
+        },
+      },
+    });
+
+    expect(migrated.segmentationArtifacts[0]).toMatchObject({
+      pendingFillOpacity: 1,
+      pendingOutlineOpacity: 0.25,
+      pendingVisibility: false,
+    });
+  });
+
+  it('keeps the legacy fill default when no view configured the group', () => {
+    const migrated = ManifestSchema.parse(
+      migrate({ segmentGroups: [legacyGroup('sg-1', 'ds-ct', [TUMOR])] })
+    ) as any;
+
+    const segmentation = segmentationFor(migrated, 'ds-ct');
+    expect(
+      effectiveFill(migrated, orderedMasks(segmentation)[0], segmentation)
+    ).toBeCloseTo(DEFAULT_SEGMENTATION_DISPLAY.fillOpacity);
+  });
+
+  it("keeps each merged group's own fill when they disagree", () => {
+    const migrated = ManifestSchema.parse(
+      migrate({
+        segmentGroups: [
+          legacyGroup('sg-1', 'ds-ct', [TUMOR]),
+          legacyGroup('sg-2', 'ds-ct', [EDEMA]),
+        ],
+        viewByID: {
+          Axial: {
+            id: 'Axial',
+            name: 'Axial',
+            type: '2D',
+            config: {
+              'sg-1': { layers: { blendConfig: { opacity: 0.2 } } },
+              'sg-2': { layers: { blendConfig: { opacity: 0.8 } } },
+            },
+          },
+        },
+      })
+    ) as any;
+
+    const segmentation = segmentationFor(migrated, 'ds-ct');
+    const [tumor, edema] = orderedMasks(segmentation);
+    expect(effectiveFill(migrated, tumor, segmentation)).toBeCloseTo(0.2);
+    expect(effectiveFill(migrated, edema, segmentation)).toBeCloseTo(0.8);
+    expect(segmentation.fillOpacity).toBeCloseTo(0.8);
+    expect(
+      orderedMasks(segmentation).map(
+        (record: any) => wireSegmentOf(migrated, record).fillOpacity <= 1
+      )
+    ).toEqual([true, true]);
+  });
+
+  it('uses the first configured thickness when legacy groups are merged', () => {
+    const migrated = migrate({
+      segmentGroups: [
+        legacyGroup('sg-1', 'ds-ct', [TUMOR]),
+        legacyGroup('sg-2', 'ds-ct', [EDEMA]),
+      ],
+      viewByID: {
+        Axial: {
+          config: {
+            'sg-1': {
+              segmentGroup: { outlineOpacity: 1, outlineThickness: 3 },
+            },
+            'sg-2': {
+              segmentGroup: { outlineOpacity: 1, outlineThickness: 7 },
+            },
+            'ds-ct': { slice: { slice: 2 } },
+          },
+        },
+        Coronal: {
+          config: {
+            'sg-1': {
+              segmentGroup: { outlineOpacity: 0.5, outlineThickness: 9 },
+            },
+          },
+        },
+      },
+    });
+
+    expect(segmentationFor(migrated, 'ds-ct').outlineThickness).toBe(3);
+    expect(migrated.viewByID.Axial.config).toEqual({
+      'ds-ct': { slice: { slice: 2 } },
+    });
+    expect(migrated.viewByID.Coronal.config).toEqual({});
+  });
+
+  it('keeps deferred legacy display settings through schema parsing', () => {
+    const migrated = migrate({
+      segmentGroups: [legacyGroup('sg-blind', 'ds-ct')],
+      viewByID: {
+        Axial: {
+          id: 'Axial',
+          name: 'Axial',
+          type: '2D',
+          config: {
+            'sg-blind': {
+              segmentGroup: { outlineOpacity: 0.25, outlineThickness: 5 },
+            },
+          },
+        },
+      },
+    });
+
+    const parsed = ManifestSchema.parse(migrated) as any;
+    expect(parsed.segmentationArtifacts[0].pendingOutlineOpacity).toBe(0.25);
+    expect(parsed.segmentations[0].outlineThickness).toBe(5);
+  });
+
+  it('maps the active group and value to the matching segment id', () => {
+    const migrated = migrate({
+      segmentGroups: [
+        legacyGroup('sg-a', 'ds-ct', [TUMOR, EDEMA]),
+        legacyGroup('sg-b', 'ds-ct', [TUMOR, EDEMA]),
+      ],
+      tools: {
+        paint: {
+          activeSegmentGroupID: 'sg-b',
+          activeSegment: 2,
+          brushSize: 6,
+          crossPlaneSync: true,
+        },
+      },
+    });
+
+    const ct = segmentationFor(migrated, 'ds-ct');
+    // The selection is a segment now, and it is the one that legacy pair became.
+    expect(migrated.selectedSegment).toBe(boundTo(ct, 'sg-b', 2).segmentId);
+
+    // Identity left the paint block entirely; its own settings survive.
+    expect(migrated.tools.paint.activeSegmentGroupID).toBeUndefined();
+    expect(migrated.tools.paint.activeSegment).toBeUndefined();
+    expect(migrated.tools.paint).toMatchObject({
+      brushSize: 6,
+      crossPlaneSync: true,
+    });
+    expect(() => ManifestSchema.parse(migrated)).not.toThrow();
+  });
+
+  it('converts a vector-tool label into one segment the shapes share', () => {
+    const polygon = (imageID: string, slice: number) => ({
+      imageID,
+      frameOfReference: { planeOrigin: [0, 0, slice], planeNormal: [0, 0, 1] },
+      slice,
+      label: 'lbl-tumor',
+      points: [
+        [1, 1, slice],
+        [5, 1, slice],
+        [3, 5, slice],
+      ],
+    });
+
+    const migrated = migrate({
+      tools: {
+        polygons: {
+          tools: [polygon('ds-ct', 3), polygon('ds-mr', 4)],
+          labels: {
+            'lbl-tumor': { labelName: 'Tumor', color: 'red', strokeWidth: 3 },
+          },
+        },
+      },
+    });
+
+    // One segment, referenced by both shapes: identity is no longer per image.
+    const [segmentId] = migrated.segments.map((segment: any) => segment.id);
+    expect(migrated.segments).toEqual([
+      { id: segmentId, name: 'Tumor', color: [255, 0, 0, 255], strokeWidth: 3 },
+    ]);
+    expect(
+      migrated.tools.polygons.tools.map((tool: any) => tool.segmentId)
+    ).toEqual([segmentId, segmentId]);
+    expect(migrated.tools.polygons.labels).toBeUndefined();
+    // A label has no voxels, so it brings no per-image mask with it.
+    expect(migrated.segmentations).toBeUndefined();
+    expect(() => ManifestSchema.parse(migrated)).not.toThrow();
+  });
+
+  it('keeps a label no tool used as a segment of its own', () => {
+    const polygon = (imageID: string, slice: number) => ({
+      imageID,
+      label: 'lbl-tumor',
+      slice,
+      frameOfReference: {
+        planeOrigin: [0, 0, slice],
+        planeNormal: [0, 0, 1],
+      },
+      points: [
+        [1, 1, slice],
+        [5, 1, slice],
+        [3, 5, slice],
+      ],
+    });
+
+    const migrated = migrate({
+      tools: {
+        polygons: {
+          tools: [polygon('ds-ct', 3)],
+          labels: {
+            'lbl-tumor': { labelName: 'Tumor', color: 'red', strokeWidth: 3 },
+            'lbl-node': { labelName: 'Node', color: 'blue', strokeWidth: 1 },
+          },
+        },
+      },
+    });
+
+    // Both labels became segments; the picker offered them before and still does.
+    expect(
+      migrated.segments.map((segment: any) => [
+        segment.name,
+        segment.strokeWidth,
+      ])
+    ).toEqual([
+      ['Tumor', 3],
+      ['Node', 1],
+    ]);
+    const [tumorSegment] = migrated.segments;
+    expect(migrated.tools.polygons.tools[0].segmentId).toBe(tumorSegment.id);
+    expect(() => ManifestSchema.parse(migrated)).not.toThrow();
+  });
+
+  it('converts CSS label colors to RGBA', () => {
+    const rectangle = (label: string) => ({
+      imageID: 'ds-ct',
+      frameOfReference: { planeOrigin: [0, 0, 1], planeNormal: [0, 0, 1] },
+      slice: 1,
+      label,
+      firstPoint: [1, 1, 1],
+      secondPoint: [4, 4, 1],
+    });
+
+    const migrated = migrate({
+      tools: {
+        rectangles: {
+          tools: [rectangle('lbl-a'), rectangle('lbl-b'), rectangle('lbl-c')],
+          labels: {
+            'lbl-a': { labelName: 'Named', color: 'blue' },
+            'lbl-b': { labelName: 'Hex', color: '#00ff00' },
+            'lbl-c': { labelName: 'Hexa', color: '#0000ff80' },
+          },
+        },
+      },
+    });
+
+    expect(
+      migrated.segments.map((segment: any) => [segment.name, segment.color])
+    ).toEqual([
+      ['Named', [0, 0, 255, 255]],
+      ['Hex', [0, 255, 0, 255]],
+      ['Hexa', [0, 0, 255, 128]],
+    ]);
+  });
+
+  it('gives a label the parser cannot read a palette color', () => {
+    const migrated = migrate({
+      tools: {
+        rectangles: {
+          tools: [],
+          labels: {
+            'lbl-a': { labelName: 'Functional', color: 'rgb(255, 0, 0)' },
+            'lbl-b': { labelName: 'Alpha', color: 'rgba(255, 0, 0, 0.5)' },
+            'lbl-c': { labelName: 'Hue', color: 'hsl(0, 100%, 50%)' },
+          },
+        },
+      },
+    });
+
+    // Opaque black would read as a deliberate choice the session never made.
+    expect(migrated.segments.map((segment: any) => segment.color)).toEqual(
+      TOOL_COLORS.slice(0, 3).map(cssColorToRGBA)
+    );
+  });
+
+  it('keeps the inline appearance of a tool whose label is gone', () => {
+    const migrated = migrate({
+      tools: {
+        rulers: {
+          tools: [
+            {
+              imageID: 'ds-ct',
+              frameOfReference: {
+                planeOrigin: [0, 0, 0],
+                planeNormal: [1, 0, 0],
+              },
+              slice: 0,
+              label: '6',
+              labelName: '',
+              color: '#ff0000',
+              strokeWidth: 7,
+              firstPoint: [0, 0, 0],
+              secondPoint: [1, 1, 0],
+            },
+          ],
+          labels: {
+            '1': { labelName: 'Label 1', color: 'red', strokeWidth: 1 },
+          },
+        },
+      },
+    });
+
+    const [tool] = migrated.tools.rulers.tools;
+    const segment = migrated.segments.find(
+      (entry: any) => entry.id === tool.segmentId
+    );
+    expect(segment).toMatchObject({
+      name: 'Segment 1',
+      color: [255, 0, 0, 255],
+      strokeWidth: 7,
+    });
+    expect(() => ManifestSchema.parse(migrated)).not.toThrow();
+  });
+
+  it('shares one segment across tool types of equal lost appearance', () => {
+    const orphan = (extra: Record<string, unknown>) => ({
+      imageID: 'ds-ct',
+      frameOfReference: { planeOrigin: [0, 0, 1], planeNormal: [0, 0, 1] },
+      slice: 1,
+      firstPoint: [1, 1, 1],
+      secondPoint: [4, 4, 1],
+      ...extra,
+    });
+
+    const migrated = migrate({
+      tools: {
+        rulers: {
+          tools: [orphan({ color: '#ff0000', strokeWidth: 7 })],
+          labels: {},
+        },
+        rectangles: {
+          tools: [
+            orphan({ color: '#ff0000', strokeWidth: 7 }),
+            orphan({ color: '#ff0000', strokeWidth: 2 }),
+          ],
+          labels: {},
+        },
+      },
+    });
+
+    const [ruler] = migrated.tools.rulers.tools;
+    const [sameWidth, otherWidth] = migrated.tools.rectangles.tools;
+    expect(sameWidth.segmentId).toBe(ruler.segmentId);
+    expect(otherWidth.segmentId).not.toBe(ruler.segmentId);
+    expect(migrated.segments.map((segment: any) => segment.name)).toEqual([
+      'Segment 1',
+      'Segment 2',
+    ]);
+  });
+
+  it('mints a segment for a tool that never carried a label', () => {
+    const migrated = migrate({
+      tools: {
+        polygons: {
+          tools: [
+            {
+              imageID: 'ds-ct',
+              frameOfReference: {
+                planeOrigin: [0, 0, 2],
+                planeNormal: [0, 0, 1],
+              },
+              slice: 2,
+              points: [
+                [1, 1, 2],
+                [5, 1, 2],
+                [3, 5, 2],
+              ],
+            },
+          ],
+          labels: {},
+        },
+      },
+    });
+
+    expect(migrated.segments).toEqual([
+      {
+        id: expect.any(String),
+        name: 'Segment 1',
+        color: cssColorToRGBA(TOOL_COLORS[0]),
+      },
+    ]);
+    expect(migrated.tools.polygons.tools[0].segmentId).toBe(
+      migrated.segments[0].id
+    );
+  });
+
+  it('does not hand a minted segment a name a label already uses', () => {
+    const migrated = migrate({
+      tools: {
+        rulers: {
+          tools: [
+            {
+              imageID: 'ds-ct',
+              frameOfReference: {
+                planeOrigin: [0, 0, 1],
+                planeNormal: [0, 0, 1],
+              },
+              slice: 1,
+              color: '#ff0000',
+              firstPoint: [1, 1, 1],
+              secondPoint: [4, 4, 1],
+            },
+          ],
+          labels: { 'lbl-a': { labelName: 'Segment 1', color: 'blue' } },
+        },
+      },
+    });
+
+    expect(migrated.segments.map((segment: any) => segment.name)).toEqual([
+      'Segment 1',
+      'Segment 2',
+    ]);
+    expect(migrated.tools.rulers.tools[0].segmentId).toBe(
+      migrated.segments[1].id
+    );
+  });
+
+  it('migrates ruler labels into the one segment list', () => {
+    const migrated = migrate({
+      tools: {
+        rulers: {
+          tools: [
+            {
+              imageID: 'ds-ct',
+              frameOfReference: {
+                planeOrigin: [0, 0, 5],
+                planeNormal: [0, 0, 1],
+              },
+              slice: 5,
+              label: 'lbl-long',
+              firstPoint: [1, 1, 5],
+              secondPoint: [4, 4, 5],
+            },
+          ],
+          labels: { 'lbl-long': { labelName: 'Long axis', color: 'red' } },
+        },
+      },
+    });
+
+    expect(migrated.version).toBe(MANIFEST_VERSION);
+    expect(migrated.segments).toEqual([
+      {
+        id: expect.any(String),
+        name: 'Long axis',
+        color: [255, 0, 0, 255],
+      },
+    ]);
+    expect(migrated.tools.rulers.labels).toBeUndefined();
+    expect(migrated.tools.rulers.tools[0].segmentId).toBe(
+      migrated.segments[0].id
+    );
+    // Rulers delineate nothing, so no mask is minted for the segment.
+    expect(
+      (migrated.segmentations ?? []).flatMap((entry: any) => entry.masks)
+    ).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Loaded stage + round trip: a migrated 6.4.0 file restores through the real
+// import path, resolves its placeholder extents against the loaded parent, and
+// re-saves as 7.0.0 that reloads identically.
+// ---------------------------------------------------------------------------
+
+const legacyScene = () =>
+  JSON.stringify({
+    version: '6.4.0',
+    dataSources: [
+      { id: 1, type: 'uri', uri: 'https://ex/ct.nrrd', name: 'CT' },
+      { id: 3, type: 'uri', uri: 'https://ex/tumor.seg.nrrd', name: 'Tumor' },
+    ],
+    datasets: [{ id: 'ds-ct', dataSourceId: 1 }],
+    viewByID: legacyAxialViewConfig('sg-1', false),
+    segmentGroups: [
+      {
+        id: 'sg-1',
+        dataSourceId: 3,
+        metadata: {
+          name: 'Painted',
+          parentImage: 'ds-ct',
+          source: SOURCE,
+          segments: segmentsBlock([TUMOR, EDEMA]),
+        },
+      },
+    ],
+    tools: {
+      // No brushSize: setting it needs the app's $paint pinia plugin.
+      paint: { activeSegmentGroupID: 'sg-1', activeSegment: 2 },
+      polygons: {
+        tools: [
+          {
+            imageID: 'ds-ct',
+            frameOfReference: {
+              planeOrigin: [0, 0, 1],
+              planeNormal: [0, 0, 1],
+            },
+            slice: 1,
+            label: 'lbl-drawn',
+            points: [
+              [1, 1, 1],
+              [3, 1, 1],
+              [2, 3, 1],
+            ],
+          },
+        ],
+        labels: {
+          'lbl-drawn': { labelName: 'Drawn', color: 'blue' },
+          // Declared, never drawn with.
+          'lbl-planned': { labelName: 'Planned', color: 'green' },
+        },
+      },
+    },
+  });
+
+const restoreLegacyScene = async (scene = legacyScene()) => {
+  const manifest = ManifestSchema.parse(migrateManifest(scene));
+  await seatImage('store-ct', { name: 'CT', dimensions: SPEC_DIMENSIONS });
+  const values = new Uint8Array(SPEC_VOXEL_COUNT);
+  values.fill(1, 4, 12);
+  values.fill(2, 12, 20);
+  await seatImage('store-tumor', {
+    name: 'Tumor',
+    dimensions: SPEC_DIMENSIONS,
+    values,
+  });
+  await completeStateFileRestore(manifest, [], {
+    'ds-ct': 'store-ct',
+    [leafStateId(3)]: 'store-tumor',
+  });
+  await nextTick();
+};
+
+describe('migrated 6.4.0 state file: loaded stage and round trip', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia());
+  });
+
+  it('bounds each migrated segment to the voxels its value covers', async () => {
+    await restoreLegacyScene();
+
+    const store = useSegmentationStore();
+    const segmentation = store.getSegmentationForImage('store-ct')!;
+    const bindings = segmentation.order.map(
+      (id) => segmentation.masks[id].representations.labelmap
+    );
+    // A polygon's segment brings no record with it, so this image holds only the
+    // two masks the group split into.
+    expect(bindings.map((binding) => binding && [...binding.extent])).toEqual([
+      [0, 3, 1, 2, 0, 0],
+      [0, 3, 0, 3, 0, 1],
+    ]);
+  });
+
+  it('restores the migrated selection and the polygon segment', async () => {
+    await restoreLegacyScene();
+
+    const store = useSegmentationStore();
+    const segments = useSegmentStore().segments;
+    const segmentation = store.getSegmentationForImage('store-ct')!;
+    expect(segments.appearanceOf(segments.selectedSegmentId.value).name).toBe(
+      'Edema'
+    );
+    expect(
+      segmentation.order.map(
+        (id) => segments.appearanceOf(segmentation.masks[id].segmentId).name
+      )
+    ).toEqual(['Tumor', 'Edema']);
+
+    const polygons = usePolygonStore();
+    const tool = polygons.toolByID[polygons.toolIDs[0]];
+    expect(polygons.appearanceOfTool(tool.id).name).toBe('Drawn');
+  });
+
+  it('restores legacy display state onto the segments and the records', async () => {
+    await restoreLegacyScene();
+
+    const segments = useSegmentStore().segments;
+    const segmentation =
+      useSegmentationStore().getSegmentationForImage('store-ct')!;
+    const records = segmentation.order.map((id) => segmentation.masks[id]);
+    // A legacy group described the thing, so its visibility is the segment's.
+    expect(
+      records.map((record) => segments.appearanceOf(record.segmentId).visible)
+    ).toEqual([false, false]);
+    records.forEach((record) => {
+      const appearance = segments.appearanceOf(record.segmentId);
+      expect(appearance.outlineOpacity).toBeCloseTo(0.25);
+      // Both segments rendered at the legacy group's 0.4, so the restored
+      // pair of opacities has to come to.
+      expect(appearance.fillOpacity * segmentation.fillOpacity).toBeCloseTo(
+        0.4
+      );
+    });
+    const drawn = segments.findSegmentByName('Drawn')!;
+    expect(segments.appearanceOf(drawn.id)).toMatchObject({
+      fillOpacity: 1,
+      outlineOpacity: 1,
+    });
+    expect(segmentation.outlineThickness).toBe(5);
+  });
+
+  it('shows a value the group did not describe as the group showed', async () => {
+    const scene = JSON.parse(legacyScene());
+    scene.segmentGroups[0].metadata.segments = segmentsBlock([TUMOR]);
+    await restoreLegacyScene(JSON.stringify(scene));
+
+    const segments = useSegmentStore().segments;
+    const segmentation =
+      useSegmentationStore().getSegmentationForImage('store-ct')!;
+    const [described, undescribed] = segmentation.order.map((id) =>
+      segments.appearanceOf(segmentation.masks[id].segmentId)
+    );
+    expect(undescribed.name).not.toBe(described.name);
+    expect(undescribed).toMatchObject({
+      visible: false,
+      fillOpacity: described.fillOpacity,
+      outlineOpacity: described.outlineOpacity,
+    });
+  });
+
+  it('offers a legacy label no tool used as a segment with no content', async () => {
+    await restoreLegacyScene();
+
+    const segments = useSegmentStore().segments;
+    expect(segments.segmentList.value.map((segment) => segment.name)).toContain(
+      'Planned'
+    );
+
+    // Offered, not painted: nothing was drawn with it.
+    const segmentation =
+      useSegmentationStore().getSegmentationForImage('store-ct')!;
+    expect(
+      segmentation.order.map(
+        (id) => segments.appearanceOf(segmentation.masks[id].segmentId).name
+      )
+    ).not.toContain('Planned');
+  });
+
+  it('re-saves as 7.0.0 and reloads identically', async () => {
+    await restoreLegacyScene();
+    const before = segmentationSnapshot('store-ct');
+    // Named after the loaded image, as a live segmentation is.
+    expect(before.name).toBe('CT');
+
+    const io = inMemoryArtifactIO();
+    const manifest = manifestForImages(['store-ct'], { tools: {} });
+    const { parsed: saved, stateFiles } = await serializeToStateFiles(
+      manifest,
+      io
+    );
+    expect(saved.version).toBe(MANIFEST_VERSION);
+    expect(manifest).not.toHaveProperty('segmentGroups');
+
+    setActivePinia(createPinia());
+    await seatImage('new-ct', { name: 'CT', dimensions: SPEC_DIMENSIONS });
+    await useSegmentationStore().deserialize({
+      manifest: saved,
+      stateFiles,
+      dataIDMap: { 'store-ct': 'new-ct' },
+      segmentIdMap: useSegmentStore().deserialize(saved).segmentIdMap,
+      io,
+    });
+    await nextTick();
+
+    expect(segmentationSnapshot('new-ct')).toEqual(before);
+  });
+});

@@ -1,0 +1,294 @@
+/// <reference types="vitest" />
+import * as path from 'node:path';
+import * as fs from 'node:fs';
+import { execSync } from 'node:child_process';
+import { createRequire } from 'node:module';
+import { Plugin, defineConfig, normalizePath } from 'vite';
+import vue from '@vitejs/plugin-vue';
+import vuetify, { transformAssetUrls } from 'vite-plugin-vuetify';
+import { createHtmlPlugin } from 'vite-plugin-html';
+import { viteStaticCopy } from 'vite-plugin-static-copy';
+import { visualizer } from 'rollup-plugin-visualizer';
+import { sentryVitePlugin } from '@sentry/vite-plugin';
+import replace from '@rollup/plugin-replace';
+
+import { BASE_URL } from './tests/e2ePorts';
+
+function resolveNodeModulePath(moduleName: string) {
+  const require = createRequire(import.meta.url);
+  let modulePath = normalizePath(require.resolve(moduleName));
+  while (!modulePath.endsWith(moduleName)) {
+    const newPath = path.posix.dirname(modulePath);
+    if (newPath === modulePath)
+      throw new Error(`Could not resolve ${moduleName}`);
+    modulePath = newPath;
+  }
+  return modulePath;
+}
+
+function resolvePath(...args: string[]) {
+  return normalizePath(path.resolve(...args));
+}
+
+const PLACEHOLDER_VERSION = '0.0.0';
+
+function getPackageInfo() {
+  const mainPkgPath = path.resolve(__dirname, 'package.json');
+  const mainPkg = JSON.parse(fs.readFileSync(mainPkgPath, 'utf-8'));
+
+  const vtkJsPath = path.join(
+    resolveNodeModulePath('@kitware/vtk.js'),
+    'package.json'
+  );
+  const vtkJsPkg = JSON.parse(fs.readFileSync(vtkJsPath, 'utf-8'));
+
+  const itkWasmPath = path.join(
+    resolveNodeModulePath('itk-wasm'),
+    'package.json'
+  );
+  const itkWasmPkg = JSON.parse(fs.readFileSync(itkWasmPath, 'utf-8'));
+
+  return {
+    versions: {
+      volview: getVolViewVersion(mainPkg.version),
+      'vtk.js': vtkJsPkg.version,
+      'itk-wasm': itkWasmPkg.version,
+    },
+  };
+}
+
+// package.json carries the placeholder 0.0.0 on main; the release workflow
+// stamps the real version from the pushed tag before it builds. Builds that
+// skip that step (Netlify, local dev) fall back to describing the tag directly.
+function getVolViewVersion(pkgVersion: string) {
+  if (pkgVersion !== PLACEHOLDER_VERSION) return pkgVersion;
+  return getGitDescribe() ?? pkgVersion;
+}
+
+function getGitDescribe() {
+  try {
+    const described = execSync('git describe --tags --always')
+      .toString()
+      .trim();
+    return described.replace(/^v/, '');
+  } catch {
+    return undefined;
+  }
+}
+
+function getGitShortSha() {
+  try {
+    return execSync('git rev-parse --short HEAD').toString().trim();
+  } catch {
+    return 'unknown';
+  }
+}
+
+const rootDir = resolvePath(__dirname);
+const distDir = resolvePath(rootDir, 'dist');
+
+const { ANALYZE_BUNDLE, SENTRY_AUTH_TOKEN, SENTRY_ORG, SENTRY_PROJECT } =
+  process.env;
+
+const pkgInfo = getPackageInfo();
+
+function configureSentryPlugin() {
+  return SENTRY_AUTH_TOKEN && SENTRY_ORG && SENTRY_PROJECT
+    ? sentryVitePlugin({
+        telemetry: false,
+        org: SENTRY_ORG,
+        project: SENTRY_PROJECT,
+        authToken: SENTRY_AUTH_TOKEN,
+      })
+    : ({} as Plugin);
+}
+
+// @mdi/font also lists eot, woff and ttf sources. Every supported browser
+// takes woff2, but the build would copy all four.
+function woff2IconFont(): Plugin {
+  return {
+    name: 'woff2-icon-font',
+    enforce: 'pre',
+    transform(code, id) {
+      if (!id.includes('@mdi/font/css/')) return null;
+      const woff2 = code.match(/url\([^)]*\.woff2[^)]*\)\s*format\("woff2"\)/);
+      const fontFace = /@font-face\{[^}]*\}/;
+      if (!woff2 || !fontFace.test(code)) {
+        return this.error('@mdi/font no longer declares its woff2 font face');
+      }
+      return code.replace(
+        fontFace,
+        `@font-face{font-family:"Material Design Icons";src:${woff2[0]};font-weight:normal;font-style:normal}`
+      );
+    },
+  };
+}
+
+export default defineConfig({
+  base: './',
+  build: {
+    outDir: distDir,
+    // An inlined font is downloaded with the render blocking stylesheet. As a
+    // file, a unicode-range subset is only fetched when the page needs it.
+    assetsInlineLimit: (filePath) =>
+      /\.(woff2?|ttf|eot)$/.test(filePath) ? false : undefined,
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (id.includes('vuetify')) {
+            return 'vuetify';
+          }
+          if (id.includes('vtk.js')) {
+            return 'vtk.js';
+          }
+          if (id.includes('node_modules')) {
+            return 'vendor';
+          }
+          return undefined;
+        },
+      },
+    },
+    sourcemap: true,
+  },
+  define: {
+    __VERSIONS__: {
+      volview: pkgInfo.versions.volview,
+      'vtk.js': pkgInfo.versions['vtk.js'],
+      'itk-wasm': pkgInfo.versions['itk-wasm'],
+    },
+    __GIT_SHORT_SHA__: JSON.stringify(getGitShortSha()),
+  },
+  resolve: {
+    alias: [
+      {
+        find: '@',
+        replacement: rootDir,
+      },
+      {
+        find: '@src',
+        replacement: resolvePath(rootDir, 'src'),
+      },
+    ],
+  },
+  plugins: [
+    woff2IconFont(),
+    {
+      name: 'virtual-modules',
+      load(id) {
+        if (id.includes('@kitware/vtk.js')) {
+          if (id.includes('ColorMaps.json.js')) {
+            // We don't use the built-in colormaps
+            return 'export default [];';
+          }
+
+          // We don't use these classes
+          if (id.includes('CubeAxesActor') || id.includes('ScalarBarActor')) {
+            return 'export default {}';
+          }
+
+          // TODO: vtk.js WebGPU isn't ready as of mid-2023
+          if (id.includes('WebGPU')) {
+            return 'export default {}';
+          }
+        }
+
+        return null;
+      },
+    },
+    replace({
+      preventAssignment: true,
+      // better sentry treeshaking
+      __SENTRY_DEBUG__: false,
+      __SENTRY_TRACING__: false,
+    }),
+    vue({ template: { transformAssetUrls } }),
+    vuetify({
+      autoImport: true,
+    }),
+    createHtmlPlugin({
+      minify: true,
+      template: 'index.html',
+    }),
+    viteStaticCopy({
+      targets: [
+        {
+          src: resolvePath(
+            resolveNodeModulePath('itk-wasm'),
+            'dist/pipeline/web-workers/bundles/itk-wasm-pipeline.min.worker.js'
+          ),
+          dest: 'itk',
+        },
+        {
+          src: resolvePath(
+            resolveNodeModulePath('@itk-wasm/image-io'),
+            'dist/pipelines/*{.wasm,.js,.zst}'
+          ),
+          dest: 'itk/image-io',
+        },
+        {
+          src: resolvePath(
+            resolveNodeModulePath('@itk-wasm/dicom'),
+            'dist/pipelines/*{.wasm,.js,.zst}'
+          ),
+          dest: 'itk/pipelines',
+        },
+        {
+          src: resolvePath(
+            resolveNodeModulePath(
+              '@itk-wasm/morphological-contour-interpolation'
+            ),
+            'dist/pipelines/*{.wasm,.js,.zst}'
+          ),
+          dest: 'itk/pipelines',
+        },
+        {
+          src: resolvePath(
+            rootDir,
+            'src/io/itk-dicom/emscripten-build/**/dicom*'
+          ),
+          dest: 'itk/pipelines',
+        },
+        {
+          src: resolvePath(
+            rootDir,
+            'src/io/resample/emscripten-build/**/resample*'
+          ),
+          dest: 'itk/pipelines',
+        },
+      ],
+    }),
+    ANALYZE_BUNDLE
+      ? visualizer({
+          template: 'treemap',
+          open: true,
+          gzipSize: true,
+          brotliSize: true,
+          filename: 'bundle-analysis.html',
+        })
+      : ({} as Plugin),
+    configureSentryPlugin(),
+  ],
+  server: {
+    // so `npm run test:e2e:dev` can access the webdriver static server temp directory
+    proxy: {
+      '/tmp': BASE_URL,
+      // Local Girder stack, so girder-launched sessions (urls=/api/v1/...)
+      // work same-origin against the dev server.
+      '/api': 'http://localhost:8080',
+    },
+  },
+  optimizeDeps: {
+    exclude: ['itk-wasm'],
+  },
+  test: {
+    environment: 'happy-dom',
+    // canvas support. See: https://github.com/vitest-dev/vitest/issues/740
+    maxWorkers: 1,
+    server: {
+      deps: {
+        inline: ['vuetify'],
+      },
+    },
+    setupFiles: ['./tests/setupVitest.ts'],
+  },
+});

@@ -1,0 +1,128 @@
+// Config-by-shape recognition. A JSON is recognized as config
+// purely by shape (no channel distinction). The trust boundary is strict on
+// section VALUES but forward-compatible on unknown top-level KEYS: only known
+// top-level section keys ⇒ config (ignoredKeys empty); a known key alongside
+// unknown top-level keys ⇒ config with the unknown keys stripped and reported
+// via `ignoredKeys` (a newer config on an older client still applies its known
+// sections); no config signal ⇒ data.
+
+import { describe, it, expect } from 'vitest';
+import { recognizeConfig } from '@/src/io/import/configJson';
+// Registers the `processing` config section (a module-evaluation side effect of
+// the feature entry point, mirroring the app's boot-time import).
+import '@/src/processing';
+
+describe('config-by-shape recognition', () => {
+  it('recognizes a JSON with only known top-level keys as config', async () => {
+    const result = await recognizeConfig({
+      windowing: { level: 40, width: 400 },
+    });
+    expect(result.kind).toBe('config');
+    if (result.kind === 'config') {
+      expect(result.config.windowing).toEqual({ level: 40, width: 400 });
+      expect(result.ignoredKeys).toEqual([]);
+    }
+  });
+
+  it('recognizes a processing-only config (registration gated later by origin)', async () => {
+    const result = await recognizeConfig({
+      processing: {
+        providers: [
+          {
+            id: 'p',
+            label: 'Analysis',
+            baseUrl: '/volview_processing',
+            jobsBaseUrl: '/volview_processing',
+          },
+        ],
+      },
+    });
+    expect(result.kind).toBe('config');
+  });
+
+  it('forward-compat: strips an unknown top-level key and applies the known section', async () => {
+    const result = await recognizeConfig({
+      windowing: { level: 40, width: 400 },
+      futureSection: { enabled: true }, // newer config on an older client
+    });
+    expect(result.kind).toBe('config');
+    if (result.kind === 'config') {
+      expect(result.config.windowing).toEqual({ level: 40, width: 400 });
+      expect(result.ignoredKeys).toEqual(['futureSection']);
+      expect('futureSection' in result.config).toBe(false);
+    }
+  });
+
+  it('strict on VALUES: a malformed known-section value still throws', async () => {
+    // Unknown top-level keys are tolerated, but a broken known section is a real
+    // error — the value trust boundary is unchanged.
+    await expect(
+      recognizeConfig({
+        windowing: { level: 'not-a-number' },
+        futureSection: { enabled: true },
+      })
+    ).rejects.toThrow();
+  });
+
+  it('treats a JSON with no known top-level keys as data (silent)', async () => {
+    const result = await recognizeConfig({
+      vertices: [[0, 0, 0]],
+      faces: [[0, 1, 2]],
+    });
+    expect(result.kind).toBe('data');
+  });
+
+  it('treats non-objects and empty objects as data', async () => {
+    expect((await recognizeConfig([1, 2, 3])).kind).toBe('data');
+    expect((await recognizeConfig('a string')).kind).toBe('data');
+    expect((await recognizeConfig(42)).kind).toBe('data');
+    expect((await recognizeConfig(null)).kind).toBe('data');
+    expect((await recognizeConfig({})).kind).toBe('data');
+  });
+
+  // A mesh-shaped JSON carrying a `segments` key is classified as config.
+  // This is the deliberate forward-compat tradeoff: a known top-level section
+  // wins recognition even amid unknown keys, so the unknown keys are stripped
+  // rather than the whole config being dropped.
+  it('mixed JSON: applies the known section and strips the unknown top-level keys', async () => {
+    const result = await recognizeConfig({
+      segments: { tumor: { color: '#ff0000' } },
+      vertices: [[0, 0, 0]],
+      cells: [[0, 1, 2]],
+    });
+    expect(result.kind).toBe('config');
+    if (result.kind === 'config') {
+      expect(result.config.segments).toEqual({
+        tumor: { color: '#ff0000' },
+      });
+      expect(result.ignoredKeys).toContain('vertices');
+      expect(result.ignoredKeys).toContain('cells');
+    }
+  });
+
+  // Self-extension invariant at the recognition layer: a config that tries to
+  // carry its own egress allow-list has `allowedOrigins` as an UNKNOWN top-level
+  // key, so it is STRIPPED (not applied) — a config can never widen egress. The
+  // known `processing` section still parses; the runtime origin gate (same-origin
+  // only) remains the sole authority over which providers actually register.
+  it('strips a self-extension allow-list rather than honoring it', async () => {
+    const result = await recognizeConfig({
+      processing: {
+        providers: [
+          {
+            id: 'p',
+            label: 'Analysis',
+            baseUrl: 'https://analysis.example/api',
+            jobsBaseUrl: 'https://analysis.example/api',
+          },
+        ],
+      },
+      allowedOrigins: ['https://analysis.example'],
+    });
+    expect(result.kind).toBe('config');
+    if (result.kind === 'config') {
+      expect(result.ignoredKeys).toEqual(['allowedOrigins']);
+      expect('allowedOrigins' in result.config).toBe(false);
+    }
+  });
+});

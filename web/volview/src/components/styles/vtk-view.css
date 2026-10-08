@@ -1,0 +1,130 @@
+.vtk-container-wrapper {
+  flex: 1;
+  display: grid;
+  grid-template-columns: 20px auto;
+  grid-template-rows: auto;
+  z-index: 0; /* avoids partial obscuring of focus outline */
+}
+
+.vtk-container {
+  padding: 0 !important;
+  margin: 0 !important;
+  /* prevent view from overflowing our app during resize */
+  min-height: 0;
+  min-width: 0;
+  width: 100%;
+
+  position: relative;
+  overflow: hidden;
+  z-index: 0;
+}
+
+.vtk-sub-container {
+  position: absolute;
+  width: 100%;
+  height: 100%;
+}
+
+.vtk-view {
+  position: relative;
+  z-index: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.vtk-view > canvas {
+  height: 100%;
+}
+
+.vtk-gutter {
+  display: flex;
+  flex-flow: column;
+  padding-top: 4px;
+  background: black;
+}
+
+.slice-slider {
+  position: relative;
+  flex: 1 1;
+  width: 100%;
+  padding: 0 3px;
+}
+
+.overlay-no-events {
+  position: absolute;
+  width: 100%;
+  height: 100%;
+  top: 0;
+  left: 0;
+  pointer-events: none;
+  touch-action: none;
+}
+
+.view-annotations {
+  color: white;
+  /* simulate text border */
+  /* prettier-ignore */
+  text-shadow:  1px  1px black,
+                1px -1px black,
+               -1px -1px black,
+               -1px  1px black,
+                0px  1px black,
+                0px -1px black,
+                1px  0px black,
+               -1px  0px black;
+  /* increase kerning to compensate for border */
+  letter-spacing: 1px;
+  font-size: clamp(8px, 0.75vw, 16px);
+  /* handle text overflow */
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.annotation-cell {
+  padding: 4px;
+  white-space: nowrap;
+}
+
+.view-control-icon {
+  text-shadow: none;
+  letter-spacing: normal;
+}
+
+.loading-indicator {
+  position: absolute;
+  top: 0;
+  width: 100%;
+  z-index: 100;
+  opacity: 0.7;
+}
+
+.loading {
+  display: flex;
+  flex-flow: column;
+  row-gap: 16px;
+  align-items: center;
+  justify-content: center;
+
+  background: rgba(0, 0, 0, 0.7);
+
+  color: white;
+  font-size: 1.4rem;
+}
+
+.loading-enter,
+.loading-leave,
+/* vue 3 */
+.loading-enter-from,
+.loading-leave-to {
+  opacity: 0;
+}
+
+.loading-enter-active,
+.loading-leave-active {
+  transition: opacity 0.2s;
+  transition-delay: 0.1s;
+}
+
+.loading-enter-to {
+  opacity: 1;
+}

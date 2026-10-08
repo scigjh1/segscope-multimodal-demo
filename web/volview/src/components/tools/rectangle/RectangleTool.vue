@@ -1,0 +1,170 @@
+<template>
+  <div class="overlay-no-events">
+    <svg class="overlay-no-events" data-testid="rectangle-tool-container">
+      <rectangle-widget-2D
+        v-for="tool in tools"
+        :key="tool.id"
+        :tool-id="tool.id"
+        :is-placing="tool.id === placingToolID"
+        :image-id="imageId"
+        :view-id="viewId"
+        :view-direction="viewDirection"
+        @contextmenu="openContextMenu(tool.id, $event)"
+        @placing="onPlacementStarted"
+        @placed="onToolPlaced"
+        @widgetHover="onHover(tool.id, $event)"
+      />
+    </svg>
+    <annotation-info :info="overlayInfo" :tool-store="activeToolStore" />
+    <annotation-context-menu ref="contextMenu" :tool-store="activeToolStore" />
+  </div>
+</template>
+
+<script lang="ts">
+import { computed, defineComponent, onUnmounted, PropType, toRefs } from 'vue';
+import { useCurrentImage } from '@/src/composables/useCurrentImage';
+import { useToolStore } from '@/src/store/tools';
+import { Tools } from '@/src/store/tools/types';
+import { getLPSAxisFromDir } from '@/src/utils/lps';
+import { LPSAxisDir } from '@/src/types/lps';
+import { useRectangleStore } from '@/src/store/tools/rectangles';
+import { usePolygonStore } from '@/src/store/tools/polygons';
+import {
+  useCurrentTools,
+  useContextMenu,
+  useHover,
+  usePlacingAnnotationTool,
+} from '@/src/composables/annotationTool';
+import AnnotationContextMenu from '@/src/components/tools/AnnotationContextMenu.vue';
+import AnnotationInfo from '@/src/components/tools/AnnotationInfo.vue';
+import { Maybe } from '@/src/types';
+import { useViewLocator } from '@/src/composables/useViewLocator';
+import { locatorPatch } from '@/src/core/annotations/locator';
+import { ToolID } from '@/src/types/annotation-tool';
+import { watchImmediate } from '@vueuse/core';
+import RectangleWidget2D from './RectangleWidget2D.vue';
+
+const useActiveToolStore = useRectangleStore;
+const toolType = Tools.Rectangle;
+
+export default defineComponent({
+  name: 'RectangleTool',
+  props: {
+    viewId: {
+      type: String,
+      required: true,
+    },
+    viewDirection: {
+      type: String as PropType<LPSAxisDir>,
+      required: true,
+    },
+    imageId: String as PropType<Maybe<string>>,
+  },
+  components: {
+    RectangleWidget2D,
+    AnnotationContextMenu,
+    AnnotationInfo,
+  },
+  setup(props) {
+    const { viewDirection, imageId, viewId } = toRefs(props);
+    const toolStore = useToolStore();
+    const activeToolStore = useActiveToolStore();
+
+    const { locator, frame, slice } = useViewLocator(viewId, imageId);
+
+    const { currentImageID } = useCurrentImage();
+    const isToolActive = computed(() => toolStore.currentTool === toolType);
+    const viewAxis = computed(() => getLPSAxisFromDir(viewDirection.value));
+
+    // --- active tool management --- //
+
+    const placingTool = usePlacingAnnotationTool(
+      activeToolStore,
+      computed(() => {
+        if (!currentImageID.value) return {};
+        return {
+          imageID: currentImageID.value,
+          ...locatorPatch(locator.value),
+        };
+      })
+    );
+
+    watchImmediate(
+      [isToolActive, currentImageID] as const,
+      ([active, imageID]) => {
+        placingTool.remove();
+        if (active && imageID) {
+          placingTool.add();
+        }
+      }
+    );
+
+    onUnmounted(() => {
+      placingTool.remove();
+    });
+
+    const onToolPlaced = () => {
+      if (currentImageID.value) {
+        placingTool.commit();
+        placingTool.add();
+      }
+    };
+
+    // --- //
+
+    const { contextMenu, openContextMenu: baseOpenContextMenu } =
+      useContextMenu();
+
+    const currentTools = useCurrentTools(
+      activeToolStore,
+      viewAxis,
+      // only show this view's placing tool
+      computed(() => {
+        if (placingTool.id.value) return [placingTool.id.value];
+        return [];
+      }),
+      frame
+    );
+
+    const { onHover: baseOnHover, overlayInfo } = useHover(currentTools, slice);
+
+    // Check if any polygon is actively being placed (has points)
+    const polygonStore = usePolygonStore();
+    const isAnyPolygonPlacing = () => {
+      return polygonStore.tools.some(
+        (tool) => tool.placing && tool.points.length > 0
+      );
+    };
+
+    // Suppress hover/context menu when a polygon is actively being placed
+    const onHover = (id: ToolID, event: any) => {
+      if (isAnyPolygonPlacing()) {
+        baseOnHover(id, { ...event, hovering: false });
+        return;
+      }
+      baseOnHover(id, event);
+    };
+
+    const openContextMenu = (id: ToolID, event: any) => {
+      if (isAnyPolygonPlacing()) {
+        return;
+      }
+      baseOpenContextMenu(id, event);
+    };
+
+    return {
+      tools: currentTools,
+      placingToolID: placingTool.id,
+      onPlacementStarted: placingTool.beginPlacement,
+      onToolPlaced,
+      contextMenu,
+      openContextMenu,
+      activeToolStore,
+      onHover,
+      overlayInfo,
+    };
+  },
+});
+</script>
+
+<style scoped src="@/src/components/styles/vtk-view.css"></style>

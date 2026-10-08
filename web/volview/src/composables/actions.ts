@@ -1,0 +1,120 @@
+import { removeSelectedTools, useToolStore } from '../store/tools';
+import { Tools } from '../store/tools/types';
+import { useViewStore } from '../store/views';
+import { Action, NOOP, perSegmentShortcut } from '../constants';
+import { useKeyboardShortcutsStore } from '../store/keyboard-shortcuts';
+import { useCurrentImage } from './useCurrentImage';
+import { useSliceConfig } from './useSliceConfig';
+import { useCineFrame } from './useCineFrame';
+import { useDatasetStore } from '../store/datasets';
+import { useSegmentStore } from '@/src/segmentation/segments';
+import { usePaintToolStore } from '../store/tools/paint';
+import { PaintMode } from '../core/tools/paint';
+import { computeEffectiveView } from '../core/views/effectiveView';
+
+// One registry holds the segments every tool draws into, so cycling it is not
+// scoped to a tool: paint takes the selection the same way a polygon does.
+const applySegmentOffset = (offset: number) => () => {
+  const { segments } = useSegmentStore();
+  const ids = segments.segmentList.value.map(({ id }) => id);
+  const selectedIndex = ids.indexOf(segments.selectedSegmentId.value ?? '');
+  if (selectedIndex === -1) return;
+  // A negative index wraps, so cycling back from the first lands on the last.
+  const next = ids.at((selectedIndex + offset) % ids.length);
+  if (next) segments.selectSegment(next);
+};
+
+const selectSegmentByIndex = (index: number) => () => {
+  const { segments } = useSegmentStore();
+  const segment = segments.segmentList.value[index];
+  if (segment) segments.selectSegment(segment.id);
+};
+
+const setTool = (tool: Tools) => () => {
+  useToolStore().setCurrentTool(tool);
+};
+
+const startPaintInMode = (mode: PaintMode) => () => {
+  useToolStore().setCurrentTool(Tools.Paint);
+  usePaintToolStore().setMode(mode);
+};
+
+const showKeyboardShortcuts = () => {
+  const keyboardStore = useKeyboardShortcutsStore();
+  keyboardStore.settingsOpen = !keyboardStore.settingsOpen;
+};
+
+const changeSlice = (offset: number) => () => {
+  const { currentImageID } = useCurrentImage();
+  const viewStore = useViewStore();
+  const { activeView } = viewStore;
+  if (!activeView) return;
+
+  const view = viewStore.getView(activeView);
+  if (!view) return;
+
+  const effective = computeEffectiveView(view, currentImageID.value);
+  if (effective.kind === 'cine') {
+    const { frame, setFrame } = useCineFrame(activeView, currentImageID);
+    setFrame(frame.value + offset);
+    return;
+  }
+
+  const { slice: currentSlice } = useSliceConfig(activeView, currentImageID);
+  currentSlice.value += offset;
+};
+
+const clearScene = () => () => {
+  const datasetStore = useDatasetStore();
+  datasetStore.removeAll();
+};
+
+const deleteCurrentImage = () => () => {
+  const { currentImageID } = useCurrentImage();
+  if (currentImageID.value) {
+    const datasetStore = useDatasetStore();
+    datasetStore.remove(currentImageID.value);
+  }
+};
+
+const changeBrushSize = (delta: number) => () => {
+  const paintStore = usePaintToolStore();
+  const newSize = Math.max(1, paintStore.brushSize + delta);
+  paintStore.setBrushSize(newSize);
+};
+
+export const ACTION_TO_FUNC = {
+  windowLevel: setTool(Tools.WindowLevel),
+  pan: setTool(Tools.Pan),
+  zoom: setTool(Tools.Zoom),
+  ruler: setTool(Tools.Ruler),
+  paint: startPaintInMode(PaintMode.CirclePaint),
+  paintEraser: startPaintInMode(PaintMode.Erase),
+  paintEyedropper: NOOP,
+  brushSizeModifier: NOOP, // act as modifier key rather than immediate effect, so no-op
+  decreaseBrushSize: changeBrushSize(-1),
+  increaseBrushSize: changeBrushSize(1),
+  rectangle: setTool(Tools.Rectangle),
+  crosshairs: setTool(Tools.Crosshairs),
+  temporaryCrosshairs: NOOP, // behavior implemented elsewhere
+  crop: setTool(Tools.Crop),
+  polygon: setTool(Tools.Polygon),
+  select: setTool(Tools.Select),
+
+  nextSlice: changeSlice(-1),
+  previousSlice: changeSlice(1),
+  grabSlice: NOOP, // acts as a modifier key rather than immediate effect, so no-op
+
+  decrementLabel: applySegmentOffset(-1),
+  incrementLabel: applySegmentOffset(1),
+  ...perSegmentShortcut(selectSegmentByIndex),
+
+  deleteSelectedAnnotations: removeSelectedTools,
+
+  deleteCurrentImage: deleteCurrentImage(),
+  clearScene: clearScene(),
+
+  mergeNewPolygon: NOOP, // acts as a modifier key rather than immediate effect, so no-op
+
+  showKeyboardShortcuts,
+} as const satisfies Record<Action, () => void>;

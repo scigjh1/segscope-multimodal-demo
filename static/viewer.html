@@ -1,0 +1,931 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <style>
+/* SegScope theme layered over the original NiiVue drawing UI. */
+header{background:#192536!important;color:#d9e6f8!important;border-bottom:1px solid #33445b}
+.dropbtn{background:#192536!important;color:#d9e6f8!important}
+.dropdown-content{background:#202f43!important;color:#d9e6f8!important}
+.dropdown-content a{color:#d9e6f8!important}
+footer{background:#192536!important;color:#c7d8ef!important}
+
+      body {
+        font-family: Arial, Helvetica, sans-serif;
+        background: #808080; /* Restored light gray background */
+        color: black; /* Restored black text */
+        margin: 0;
+        padding: 0;
+        height: 100vh;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden; /* Prevent body scrollbars */
+      }
+
+      header {
+        display: flex;
+        justify-content: flex-start; /* Align items to the start */
+        padding: 5px;
+        background-color: #a0a0a0; /* Restored lighter gray header */
+        flex-wrap: wrap; /* Allow wrapping if needed */
+        flex-shrink: 0; /* Prevent header shrinking */
+        z-index: 10; /* Keep header above canvas */
+      }
+
+      /* Dropdown Button */
+      .dropbtn {
+        background-color: #a0a0a0; /* Match header */
+        color: black; /* Match body text */
+        padding: 6px 12px; /* Smaller padding */
+        font-size: 14px; /* Smaller font */
+        border: none;
+        cursor: pointer;
+      }
+
+      /* Dropdown button on hover & focus */
+      .dropbtn:hover,
+      .dropbtn:focus {
+        background-color: #b0b0b0; /* Lighter gray */
+      }
+
+      /* The container <div> - needed to position the dropdown content */
+      .dropdown {
+        position: relative;
+        display: inline-block;
+        margin-right: 5px; /* Space between dropdowns */
+      }
+
+      /* Dropdown Content (Hidden by Default) */
+      .dropdown-content {
+        display: none;
+        position: absolute;
+        background-color: #f9f9f9;
+        min-width: 160px;
+        box-shadow: 0px 8px 16px 0px rgba(0, 0, 0, 0.2);
+        z-index: 1;
+        max-height: calc(100vh - 60px); /* Limit height, adjust 60px based on header/footer */
+        overflow-y: auto; /* Add scroll if content overflows */
+      }
+
+      /* Links inside the dropdown */
+      .dropdown-content a {
+        color: black;
+        padding: 8px 12px; /* Smaller padding */
+        text-decoration: none;
+        display: block;
+        font-size: 13px; /* Smaller font */
+      }
+
+      /* Change color of dropdown links on hover */
+      .dropdown-content a:hover {
+        background-color: #ddd;
+      }
+
+      /* Show the dropdown menu (use JS to add this class to the .dropdown-content container when the user clicks on the dropdown button) */
+      .dropdown:hover .dropdown-content {
+        display: block;
+      }
+
+      .dropdown-item-checked:before {
+        content: '\2713\0020'; /* check mark */
+        font-weight: bold;
+      }
+      .divider {
+        border-top: 1px solid #bbb;
+        margin-top: 4px;
+        padding-top: 4px;
+      }
+
+      main#container {
+        display: flex; /* Use flexbox for the main container */
+        flex-grow: 1; /* Allow main to grow and fill available space */
+        position: relative; /* Needed for absolute positioning of canvas */
+        background-color: black;
+        min-height: 0; /* Prevent flex item from overflowing */
+      }
+
+      canvas {
+        position: absolute; /* Position canvas within the flex container */
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        display: block; /* Remove extra space below canvas */
+        cursor: crosshair;
+      }
+      canvas:focus {
+        outline: 0px;
+      }
+
+      footer {
+        background-color: #a0a0a0; /* Match header */
+        color: black; /* Match body */
+        font-size: 12px;
+        padding: 2px 5px;
+        flex-shrink: 0; /* Prevent footer shrinking */
+        overflow: hidden; /* Prevent content overflow */
+        white-space: nowrap; /* Prevent wrapping */
+        text-overflow: ellipsis; /* Add ellipsis if text overflows */
+      }
+    </style>
+    <title>Drawing User Interface</title>
+  </head>
+  <body>
+    <header>
+      <div class="dropdown">
+        <button class="dropbtn">File</button>
+        <div class="dropdown-content">
+          <a class="viewBtn" id="SaveDraw" accesskey="s">Save Drawing ^S</a>
+          <a class="viewBtn" id="CloseDraw">Close Drawing</a>
+          <a class="viewBtn" id="SaveBitmap">Screen Shot</a>
+          <a class="viewBtn" id="ShowHeader">Show Header</a>
+          <a class="linker" href="https://github.com/niivue/niivue">About</a>
+        </div>
+      </div>
+      <div class="dropdown">
+        <button class="dropbtn">Edit</button>
+        <div class="dropdown-content">
+          <a class="viewBtn" id="Undo" accesskey="z">Undo Draw ^Z</a>
+        </div>
+      </div>
+      <div class="dropdown">
+        <button class="dropbtn">View</button>
+        <div class="dropdown-content">
+          <a href="#" class="viewBtn" id="|Axial">Axial</a>
+          <a class="viewBtn" id="|Sagittal">Sagittal</a>
+          <a class="viewBtn" id="|Coronal">Coronal</a>
+          <a class="viewBtn" id="|Render">Render</a>
+          <a class="viewBtn" id="|MultiPlanar">A+C+S</a>
+          <a class="viewBtn" id="|MultiPlanarRender">A+C+S+R</a>
+          <a class="viewBtn divider" id="Colorbar">Colorbar</a>
+          <a class="viewBtn" id="Radiological">Radiological</a>
+          <a class="viewBtn dropdown-item-checked" id="Crosshair">Render Crosshair</a>
+          <a class="viewBtn" id="ClipPlane">Render Clip Plane</a>
+          <a class="viewBtn" id="ClipAllVolumes">Clip All Volumes</a>
+          <a class="viewBtn dropdown-item-checked" id="WorldSpace">World Space</a>
+          <a class="viewBtn dropdown-item-checked" id="Interpolate">Smooth Interpolation</a>
+          <a class="viewBtn" id="RemoveHaze">Remove Haze</a>
+          <a class="viewBtn divider" id="Left">Left</a>
+          <a class="viewBtn" id="Right">Right</a>
+          <a class="viewBtn" id="Anterior">Anterior</a>
+          <a class="viewBtn" id="Posterior">Posterior</a>
+          <a class="viewBtn" id="Inferior">Inferior</a>
+          <a class="viewBtn" id="Superior">Superior</a>
+        </div>
+      </div>
+      <div class="dropdown">
+        <button class="dropbtn">Color</button>
+        <div class="dropdown-content">
+          <a class="viewBtn dropdown-item-checked" id="!Gray">Gray</a>
+          <a class="viewBtn" id="!Plasma">Plasma</a>
+          <a class="viewBtn" id="!Viridis">Viridis</a>
+          <a class="viewBtn" id="!Inferno">Inferno</a>
+          <a class="viewBtn divider" id="BackColor">Light Background</a>
+        </div>
+      </div>
+      <div class="dropdown">
+        <button class="dropbtn">Draw</button>
+        <div class="dropdown-content">
+          <a class="viewBtn dropdown-item-checked" id="@Off" accesskey="0">Off ^0</a>
+          <a class="viewBtn" id="@Red" accesskey="1">Red ^1</a>
+          <a class="viewBtn" id="@Green" accesskey="2">Green ^2</a>
+          <a class="viewBtn" id="@Blue" accesskey="3">Blue ^3</a>
+          <a class="viewBtn" id="@Yellow" accesskey="4">Yellow ^4</a>
+          <a class="viewBtn" id="@Cyan" accesskey="5">Cyan ^5</a>
+          <a class="viewBtn" id="@Purple" accesskey="6">Purple ^6</a>
+          <a class="viewBtn" id="@Erase" accesskey="7">Erase ^7</a>
+          <a class="viewBtn" id="@Cluster" accesskey="8">Erase Cluster ^8</a>
+          <a class="viewBtn" id="@GrowClusterDark">Grow Cluster Dark</a>
+          <a class="viewBtn" id="@GrowClusterBright">Grow Cluster Bright</a>
+          <a class="viewBtn" id="@ClickToSegmentAuto">Click To Segment (Auto)</a>
+          <a class="viewBtn dropdown-item-checked" id="ClickToSegment2D">Click To Segment 2D</a>
+          <a class="viewBtn divider dropdown-item-checked" id="{$itksnap">ITK Palette</a>
+          <a class="viewBtn" id="{$slicer3d">Slicer3D Palette</a>
+          <a class="viewBtn" id="{$Custom">Custom Palette</a>
+          <a class="viewBtn divider dropdown-item-checked" id="DrawFilled" accesskey="f">Fill Outline ^F</a>
+          <a class="viewBtn dropdown-item-checked" id="DrawOverwrite" accesskey="o">Pen Overwrites Existing ^O</a>
+          <a class="viewBtn dropdown-item-checked" id="Translucent" accesskey="t">Translucent ^T</a>
+          <a class="viewBtn divider dropdown-item-checked" id="PenType-pen" accesskey="p">Pen Tool ^P</a>
+          <a class="viewBtn" id="PenType-rectangle" accesskey="r">Rectangle Tool ^R</a>
+          <a class="viewBtn" id="PenType-ellipse" accesskey="e">Ellipse Tool ^E</a>
+          <a class="viewBtn dropdown-item-checked" id="ThinPen">Thin Pen</a>
+          <a class="viewBtn" id="Growcut">Grow Cut</a>
+          <a class="viewBtn" id="DrawOtsu">Otsu</a>
+          <a class="viewBtn" id="SmoothDrawing">Smooth Drawing 3D</a>
+          <a class="viewBtn divider" id="InterpolateMaskGeometricAxial">Interpolate Mask (Simple) Axial</a>
+          <a class="viewBtn" id="InterpolateMaskGeometricCoronal">Interpolate Mask (Simple) Coronal</a>
+          <a class="viewBtn" id="InterpolateMaskGeometricSagittal">Interpolate Mask (Simple) Sagittal</a>
+          <a class="viewBtn divider" id="InterpolateMaskIntensityAxial">Interpolate Mask (Intensity-Guided) Axial</a>
+          <a class="viewBtn" id="InterpolateMaskIntensityCoronal">Interpolate Mask (Intensity-Guided) Coronal</a>
+          <a class="viewBtn" id="InterpolateMaskIntensitySagittal">Interpolate Mask (Intensity-Guided) Sagittal</a>
+        </div>
+      </div>
+      <div class="dropdown">
+        <button class="dropbtn">Drag</button>
+        <div class="dropdown-content">
+          <a class="viewBtn dropdown-item-checked" id="^contrast">Contrast</a>
+          <a class="viewBtn" id="^measurement">Measurement</a>
+          <a class="viewBtn" id="^pan">Pan/Zoom</a>
+          <a class="viewBtn" id="^none">None</a>
+        </div>
+      </div>
+    </header>
+    <main id="container">
+      <canvas id="gl1"></canvas>
+    </main>
+    <footer id="intensity"> </footer>
+  </body>
+</html>
+<script src="/vendor/niivue.js"></script>
+<script type="module" async>
+  const niivue = window.niivue
+
+  const isTouchDevice = 'ontouchstart' in window || navigator.maxTouchPoints > 0 || navigator.msMaxTouchPoints > 0
+  var isFilled = true
+  async function handleImageLoaded(data) {
+    nv1.closeDrawing()
+    document.getElementById('@Off')?.click()
+  }
+  function handleIntensityChange(data, event) {
+    document.getElementById('intensity').innerHTML = '  ' + data.string
+  }
+  var nv1 = new niivue.Niivue({
+    dragAndDropEnabled: true,
+    backColor: [0, 0, 0, 1],
+    fontMinPx: 12,
+    show3Dcrosshair: true,
+    onLocationChange: handleIntensityChange,
+    onImageLoaded: handleImageLoaded,
+    logLevel: 'debug',
+    clickToSegmentIs2D: true // Default to 2D
+  })
+  nv1.opts.isColorbar = false // Default colorbar off
+  nv1.opts.legendTextColor = [0.85, 0.9, 1, 1] // Black legend text
+  nv1.opts.fontColor = [0.85, 0.9, 1, 1] // Black font color
+  nv1.opts.crosshairColor = [0, 0, 1, 1] // Blue crosshair
+  nv1.setRadiologicalConvention(false)
+  await nv1.attachTo('gl1')
+  nv1.setClipPlane([0.3, 270, 0])
+  nv1.setRenderAzimuthElevation(120, 10)
+  nv1.setSliceType(nv1.sliceTypeMultiplanar) // Start with multiplanar
+  nv1.setSliceMM(true)
+  nv1.opts.multiplanarShowRender = niivue.SHOW_RENDER.NEVER
+  nv1.graph.autoSizeMultiplanar = true
+  nv1.graph.opacity = 1.0
+  nv1.drawOpacity = 0.3
+  nv1.drawRimOpacity = 1.0
+  var volumeList1 = [{ url: '/api/cases/' + new URLSearchParams(location.search).get('case') + '/image.nii.gz' }]
+  await nv1.loadVolumes(volumeList1)
+  window.segscopeViewer = nv1;
+  window.addEventListener('message', async (event) => {
+    if (event.origin !== location.origin || event.source !== parent) return;
+    const msg=event.data;
+    try {
+      if(msg.action==='prediction') {
+        nv1.closeDrawing();
+        await nv1.loadDrawingFromUrl(msg.url);
+        nv1.setDrawingEnabled(false);
+      }
+      if(msg.action==='edit') { nv1.setDrawingEnabled(true); nv1.setPenValue(1); }
+      if(msg.action==='focus' && Array.isArray(msg.center_zyx) && msg.center_zyx.length===3) {
+        nv1.scene.crosshairPos=nv1.vox2frac(msg.center_zyx.slice().reverse());nv1.drawScene();
+      }
+      if(msg.action==='save') { await nv1.saveImage({filename:'segscope-correction.nii.gz',isSaveDrawing:true}); }
+      if(msg.action==='overlay') {
+        await nv1.loadVolumes([{url:volumeList1[0].url},{url:msg.url,colormap:'hot',opacity:0.45,cal_min:0,cal_max:1}]);
+      }
+      if(msg.action==='original') { await nv1.loadVolumes(volumeList1); }
+      parent.postMessage({type:'viewer-action-complete',action:msg.action},location.origin);
+    } catch(error) {parent.postMessage({type:'viewer-error',message:error.message},location.origin);}
+  });
+  parent.postMessage({type:'viewer-ready'},location.origin);
+
+
+  function updateCheckmark(id, isChecked) {
+    const element = document.getElementById(id)
+    if (element) {
+      if (isChecked) {
+        element.classList.add('dropdown-item-checked')
+      } else {
+        element.classList.remove('dropdown-item-checked')
+      }
+    }
+  }
+
+  function setInitialCheckmarks() {
+    updateCheckmark('Colorbar', nv1.opts.isColorbar)
+    updateCheckmark('Radiological', nv1.opts.isRadiologicalConvention)
+    updateCheckmark('Crosshair', nv1.opts.show3Dcrosshair)
+    updateCheckmark('ClipAllVolumes', nv1.opts.isClipAllVolumes)
+    updateCheckmark('WorldSpace', nv1.opts.isSliceMM)
+    updateCheckmark('Interpolate', !nv1.opts.isNearestInterpolation) // Interpolation is !Nearest
+    updateCheckmark('BackColor', nv1.opts.backColor[0] > 0.5)
+    document.getElementById('BackColor').textContent =
+      nv1.opts.backColor[0] > 0.5 ? 'Dark Background' : 'Light Background'
+    updateCheckmark('@Off', !nv1.opts.drawingEnabled) // Checked if drawing is OFF
+    updateCheckmark('DrawFilled', isFilled)
+    updateCheckmark('DrawOverwrite', nv1.drawFillOverwrites)
+    updateCheckmark('Translucent', nv1.drawOpacity < 1.0)
+    updateCheckmark('ThinPen', nv1.opts.penSize < 2)
+    updateCheckmark('ClickToSegment2D', nv1.opts.clickToSegmentIs2D) // Set initial state for 2D/3D toggle
+    
+    // Set initial pen type
+    toggleGroup('PenType-' + nv1.document.opts.penType)
+
+    if (nv1.opts.sliceType === nv1.sliceTypeAxial) toggleGroup('|Axial')
+    else if (nv1.opts.sliceType === nv1.sliceTypeCoronal) toggleGroup('|Coronal')
+    else if (nv1.opts.sliceType === nv1.sliceTypeSagittal) toggleGroup('|Sagittal')
+    else if (nv1.opts.sliceType === nv1.sliceTypeRender) toggleGroup('|Render')
+    else if (nv1.opts.multiplanarShowRender === niivue.SHOW_RENDER.ALWAYS) toggleGroup('|MultiPlanarRender')
+    else toggleGroup('|MultiPlanar') // Default for multiplanar without render
+
+    if (nv1.volumes.length > 0) {
+      toggleGroup('!' + nv1.volumes[0].colormap)
+    } else {
+      toggleGroup('!Gray') // Default
+    }
+
+    if (!nv1.opts.drawingEnabled) {
+      toggleGroup('@Off')
+    } else if (nv1.opts.clickToSegment) {
+      toggleGroup('@ClickToSegmentAuto')
+    } else {
+      switch (nv1.opts.penValue) {
+        case 0:
+          toggleGroup('@Erase')
+          break
+        case 1:
+          toggleGroup('@Red')
+          break
+        case 2:
+          toggleGroup('@Green')
+          break
+        case 3:
+          toggleGroup('@Blue')
+          break
+        case 4:
+          toggleGroup('@Yellow')
+          break
+        case 5:
+          toggleGroup('@Cyan')
+          break
+        case 6:
+          toggleGroup('@Purple')
+          break
+        case -0:
+          toggleGroup('@Cluster')
+          break
+        default:
+          if (isNaN(nv1.opts.penValue)) toggleGroup('@GrowCluster')
+          else if (nv1.opts.penValue === Number.POSITIVE_INFINITY) toggleGroup('@GrowClusterBright')
+          else if (nv1.opts.penValue === Number.NEGATIVE_INFINITY) toggleGroup('@GrowClusterDark')
+          else toggleGroup('@Off') // Fallback
+      }
+    }
+
+    switch (nv1.opts.dragMode) {
+      case nv1.dragModes.contrast:
+        toggleGroup('^contrast')
+        break
+      case nv1.dragModes.measurement:
+        toggleGroup('^measurement')
+        break
+      case nv1.dragModes.pan:
+        toggleGroup('^pan')
+        break
+      case nv1.dragModes.none:
+        toggleGroup('^none')
+        break
+      default:
+        toggleGroup('^contrast') // Default
+    }
+
+    toggleGroup('_FLAIR') // Assuming FLAIR is the default loaded one
+    toggleGroup('{$thinpen')
+    toggleGroup('{$itksnap')
+  }
+
+  setInitialCheckmarks()
+
+  function toggleGroup(id) {
+    let buttons = document.getElementsByClassName('viewBtn')
+    let char0 = id.charAt(0)
+    for (let i = 0; i < buttons.length; i++) {
+      if (buttons[i].classList.contains('divider')) continue
+      if (!buttons[i].id || buttons[i].id.length === 0 || buttons[i].id.charAt(0) !== char0) continue
+      buttons[i].classList.remove('dropdown-item-checked')
+    }
+    let button = document.getElementById(id)
+    if (button) button.classList.add('dropdown-item-checked')
+  } // toggleGroup()
+
+  function performMaskInterpolation(useIntensityGuided, sliceType) {
+    if (!nv1.drawBitmap) {
+      return { success: false, message: 'No drawing mask available. Please create a drawing first.' }
+    }
+
+    if (!nv1.back || !nv1.back.dims) {
+      return { success: false, message: 'No background image loaded.' }
+    }
+
+    // Use drawPenAxCorSag to determine the last drawing plane
+    let axis
+    
+    // If drawPenAxCorSag is not set or invalid, try to use current slice type
+    if (sliceType < 0 || sliceType === undefined) {
+      if (nv1.opts.sliceType === nv1.sliceTypeRender) {
+        return { success: false, message: 'Mask interpolation does not work in render mode.' }
+      } else if (nv1.opts.sliceType === nv1.sliceTypeMultiplanar) {
+        // In multiplanar mode without a known drawing plane
+        return { success: false, message: 'Please draw on a specific pane first to determine interpolation axis.' }
+      }
+      // Single slice mode - use the current slice type
+      sliceType = nv1.opts.sliceType
+    }
+    
+    // Determine axis based on slice type
+    if (sliceType === niivue.SLICE_TYPE.AXIAL) {
+      axis = 'axial'
+    } else if (sliceType === niivue.SLICE_TYPE.CORONAL) {
+      axis = 'coronal'
+    } else if (sliceType === niivue.SLICE_TYPE.SAGITTAL) {
+      axis = 'sagittal'
+    } else {
+      return { success: false, message: 'Invalid slice type for interpolation.' }
+    }
+
+    // Find first and last slices with drawing data using the new Niivue method
+    const boundarySlices = nv1.findDrawingBoundarySlices(sliceType)
+    
+    if (!boundarySlices) {
+      return { success: false, message: 'No drawing data found in any slices.' }
+    }
+
+    if (boundarySlices.first === boundarySlices.last) {
+      return { success: false, message: 'Drawing data found in only one slice. Need at least two slices with data for interpolation.' }
+    }
+
+    const firstSliceWithData = boundarySlices.first
+    const lastSliceWithData = boundarySlices.last
+
+    // Perform interpolation using the existing method
+    try {
+      nv1.interpolateMaskSlices(firstSliceWithData, lastSliceWithData, {
+        useIntensityGuided: useIntensityGuided,
+        intensityWeight: 0.7,
+        binaryThreshold: 0.375,
+        intensitySigma: 0.1,
+        applySmoothingToSlices: true,
+        sliceType: sliceType
+      })
+      
+      return { 
+        success: true, 
+        sliceLow: firstSliceWithData, 
+        sliceHigh: lastSliceWithData,
+        axis: axis
+      }
+    } catch (error) {
+      return { success: false, message: `Error during interpolation: ${error.message}` }
+    }
+  }
+
+  async function onButtonClick(event) {
+    const id = event.target.id
+    const buttonElement = event.target // Keep reference to the clicked element
+
+    let handled = false
+
+    switch (id) {
+      // File Menu
+      case 'SaveDraw':
+        nv1.saveImage({ filename: 'draw.nii', isSaveDrawing: true })
+        handled = true
+        break
+      case 'CloseDraw':
+        nv1.closeDrawing()
+        document.getElementById('@Off')?.click()
+        handled = true
+        break
+      case 'SaveBitmap':
+        nv1.saveScene('ScreenShot.png')
+        handled = true
+        break
+      case 'ShowHeader':
+        if (nv1.volumes.length > 0) {
+          alert(nv1.volumes[0].hdr.toFormattedString())
+        } else {
+          alert('No volume loaded.')
+        }
+        handled = true
+        break
+
+      // Edit Menu
+      case 'Undo':
+        nv1.drawUndo()
+        handled = true
+        break
+
+      // View Menu
+      case 'Colorbar':
+        nv1.opts.isColorbar = !nv1.opts.isColorbar
+        buttonElement.classList.toggle('dropdown-item-checked')
+        nv1.drawScene()
+        handled = true
+        break
+      case 'Radiological':
+        nv1.opts.isRadiologicalConvention = !nv1.opts.isRadiologicalConvention
+        buttonElement.classList.toggle('dropdown-item-checked')
+        nv1.drawScene()
+        handled = true
+        break
+      case 'Crosshair':
+        nv1.opts.show3Dcrosshair = !nv1.opts.show3Dcrosshair
+        buttonElement.classList.toggle('dropdown-item-checked')
+        nv1.drawScene()
+        handled = true
+        break
+      case 'ClipPlane':
+        if (nv1.scene.clipPlaneDepthAziElevs[0] > 1.8) nv1.setClipPlane([0.3, 270, 0])
+        else nv1.setClipPlane([2, 270, 0])
+        handled = true
+        break
+      case 'ClipAllVolumes':
+        nv1.opts.isClipAllVolumes = !nv1.opts.isClipAllVolumes
+        buttonElement.classList.toggle('dropdown-item-checked')
+        nv1.drawScene()
+        handled = true
+        break
+      case 'WorldSpace':
+        nv1.setSliceMM(!nv1.opts.isSliceMM)
+        buttonElement.classList.toggle('dropdown-item-checked')
+        handled = true
+        break
+      case 'Interpolate':
+        nv1.setInterpolation(!nv1.opts.isNearestInterpolation)
+        buttonElement.classList.toggle('dropdown-item-checked')
+        handled = true
+        break
+      case 'RemoveHaze':
+        {
+          let level = parseInt(prompt('Remove Haze (1..5)', '5'))
+          if (!isNaN(level)) nv1.removeHaze(level)
+        }
+        handled = true
+        break
+      case 'Left':
+        nv1.moveCrosshairInVox(-1, 0, 0)
+        handled = true
+        break
+      case 'Right':
+        nv1.moveCrosshairInVox(1, 0, 0)
+        handled = true
+        break
+      case 'Posterior':
+        nv1.moveCrosshairInVox(0, -1, 0)
+        handled = true
+        break
+      case 'Anterior':
+        nv1.moveCrosshairInVox(0, 1, 0)
+        handled = true
+        break
+      case 'Inferior':
+        nv1.moveCrosshairInVox(0, 0, -1)
+        handled = true
+        break
+      case 'Superior':
+        nv1.moveCrosshairInVox(0, 0, 1)
+        handled = true
+        break
+
+      // Color Menu
+      case 'BackColor':
+        if (nv1.opts.backColor[0] > 0.5) {
+          // Currently Light
+          nv1.opts.backColor = [0, 0, 0, 1] // Set to Dark
+          nv1.opts.legendTextColor = [1, 1, 1, 1]
+          nv1.opts.fontColor = [1, 1, 1, 1]
+          nv1.opts.crosshairColor = [0, 0, 1, 1] // Blue on dark
+          buttonElement.textContent = 'Light Background'
+        } else {
+          // Currently Dark
+          nv1.opts.backColor = [0.8, 0.8, 0.8, 1] // Set to Light
+          nv1.opts.legendTextColor = [0.85, 0.9, 1, 1]
+          nv1.opts.fontColor = [0.85, 0.9, 1, 1]
+          nv1.opts.crosshairColor = [0, 0, 1, 1] // Blue on light
+          buttonElement.textContent = 'Dark Background'
+        }
+        buttonElement.classList.toggle('dropdown-item-checked')
+        nv1.drawScene()
+        handled = true
+        break
+      // Draw Menu
+      case 'Translucent':
+        if (nv1.drawOpacity > 0.75) nv1.drawOpacity = 0.5
+        else nv1.drawOpacity = 1.0
+        buttonElement.classList.toggle('dropdown-item-checked')
+        nv1.drawScene()
+        handled = true
+        break
+      case 'ThinPen':
+        if (nv1.opts.penSize > 1) nv1.opts.penSize = 1
+        else nv1.opts.penSize = 3
+        buttonElement.classList.toggle('dropdown-item-checked')
+        nv1.drawScene()
+        handled = true
+        break
+
+      case 'Growcut':
+        nv1.drawGrowCut()
+        handled = true
+        break
+      case 'SmoothDrawing':
+        if (nv1.opts.smoothDrawing > 0) {
+          nv1.opts.smoothDrawing = 0
+        } else {
+          nv1.opts.smoothDrawing = 2.0
+        }
+        buttonElement.classList.toggle('dropdown-item-checked')
+        nv1.refreshDrawing()
+        handled = true
+        break
+      case 'DrawOtsu':
+        {
+          let levels = parseInt(prompt('Segmentation classes (2..4)', '3'))
+          if (!isNaN(levels)) nv1.drawOtsu(levels)
+        }
+        handled = true
+        break
+      case 'InterpolateMaskGeometricAxial':
+        {
+          const sliceType = nv1.sliceTypeAxial
+          const result = performMaskInterpolation(false, sliceType)
+          if (result.success) {
+            console.log(`Geometric interpolation completed between slices ${result.sliceLow} and ${result.sliceHigh} (${result.axis} axis)`)
+          } else {
+            alert(result.message)
+          }
+        }
+        handled = true
+        break
+      case 'InterpolateMaskGeometricCoronal':
+        {
+          const sliceType = nv1.sliceTypeCoronal
+          const result = performMaskInterpolation(false, sliceType)
+          if (result.success) {
+            console.log(`Geometric interpolation completed between slices ${result.sliceLow} and ${result.sliceHigh} (${result.axis} axis)`)
+          } else {
+            alert(result.message)
+          }
+        }
+        handled = true
+        break
+      case 'InterpolateMaskGeometricSagittal':
+        {
+          const sliceType = nv1.sliceTypeSagittal
+          const result = performMaskInterpolation(false, sliceType)
+          if (result.success) {
+            console.log(`Geometric interpolation completed between slices ${result.sliceLow} and ${result.sliceHigh} (${result.axis} axis)`)
+          } else {
+            alert(result.message)
+          }
+        }
+        handled = true
+        break
+      case 'InterpolateMaskIntensityAxial':
+        {
+          const sliceType = nv1.sliceTypeAxial
+          const result = performMaskInterpolation(true, sliceType)
+          if (result.success) {
+            console.log(`Intensity-guided interpolation completed between slices ${result.sliceLow} and ${result.sliceHigh} (${result.axis} axis)`)
+          } else {
+            alert(result.message)
+          }
+        }
+        handled = true
+        break
+      case 'InterpolateMaskIntensityCoronal':
+        {
+          const sliceType = nv1.sliceTypeCoronal
+          const result = performMaskInterpolation(true, sliceType)
+          if (result.success) {
+            console.log(`Intensity-guided interpolation completed between slices ${result.sliceLow} and ${result.sliceHigh} (${result.axis} axis)`)
+          } else {
+            alert(result.message)
+          }
+        }
+        handled = true
+        break
+      case 'InterpolateMaskIntensitySagittal':
+        {
+          const sliceType = nv1.sliceTypeSagittal
+          const result = performMaskInterpolation(true, sliceType)
+          if (result.success) {
+            console.log(`Intensity-guided interpolation completed between slices ${result.sliceLow} and ${result.sliceHigh} (${result.axis} axis)`)
+          } else {
+            alert(result.message)
+          }
+        }
+        handled = true
+        break
+      case 'DrawFilled':
+        isFilled = !isFilled
+        nv1.setPenValue(nv1.opts.penValue, isFilled)
+        buttonElement.classList.toggle('dropdown-item-checked')
+        handled = true
+        break
+      case 'DrawOverwrite':
+        nv1.drawFillOverwrites = !nv1.drawFillOverwrites
+        buttonElement.classList.toggle('dropdown-item-checked')
+        handled = true
+        break
+      case 'PenType-pen':
+        nv1.document.opts.penType = niivue.PEN_TYPE.PEN
+        toggleGroup('PenType-pen')
+        handled = true
+        break
+      case 'PenType-rectangle':
+        nv1.document.opts.penType = niivue.PEN_TYPE.RECTANGLE
+        toggleGroup('PenType-rectangle')
+        handled = true
+        break
+      case 'PenType-ellipse':
+        nv1.document.opts.penType = niivue.PEN_TYPE.ELLIPSE
+        toggleGroup('PenType-ellipse')
+        handled = true
+        break
+      case 'ClickToSegment2D': // New Toggle
+        nv1.opts.clickToSegmentIs2D = !nv1.opts.clickToSegmentIs2D
+        buttonElement.classList.toggle('dropdown-item-checked')
+        console.log('ClickToSegment 2D set to:', nv1.opts.clickToSegmentIs2D)
+        handled = true
+        break
+
+      default:
+        break // Let prefix handlers try
+    }
+
+    if (!handled) {
+      if (id.startsWith('!')) {
+        // Colormap
+        if (nv1.volumes.length > 0) {
+          nv1.volumes[0].colormap = id.substring(1)
+          nv1.updateGLVolume() // Updates textures and redraws
+          toggleGroup(id)
+        }
+      } else if (id.startsWith('{')) {
+        // Draw Colormap Palette
+        if (id === '{$Custom') {
+          let cmap = {
+            R: [0, 255, 22, 127],
+            G: [0, 20, 192, 187],
+            B: [0, 152, 80, 255],
+            A: [0, 255, 255, 255],
+            labels: ['', 'pink', 'lime', 'sky']
+          }
+          nv1.setDrawColormap(cmap)
+        } else {
+          nv1.setDrawColormap(id.substring(1)) // Use name like "$itksnap"
+        }
+        toggleGroup(id)
+        nv1.updateGLVolume() // Redraw needed after palette change
+      } else if (id.startsWith('@')) {
+        // Deactivate clickToSegment unless it's the selected tool
+        nv1.opts.clickToSegment = false
+        nv1.opts.clickToSegmentAutoIntensity = false // Default off
+
+        let penValue = nv1.opts.penValue // Keep current pen if just changing tool mode
+        let isDrawingEnabled = true
+
+        switch (id) {
+          case '@Off':
+            isDrawingEnabled = false
+            break
+          case '@Erase':
+            penValue = 0
+            break
+          case '@Red':
+            penValue = 1
+            break
+          case '@Green':
+            penValue = 2
+            break
+          case '@Blue':
+            penValue = 3
+            break
+          case '@Yellow':
+            penValue = 4
+            break
+          case '@Cyan':
+            penValue = 5
+            break
+          case '@Purple':
+            penValue = 6
+            break
+          case '@Cluster':
+            penValue = -0
+            break
+          case '@GrowCluster':
+            penValue = NaN
+            break
+          case '@GrowClusterBright':
+            penValue = Number.POSITIVE_INFINITY
+            break
+          case '@GrowClusterDark':
+            penValue = Number.NEGATIVE_INFINITY
+            break
+          case '@ClickToSegmentAuto':
+            if (nv1.opts.penValue < 1 || nv1.opts.penValue > 6 || !isFinite(nv1.opts.penValue)) {
+              penValue = 1 // Default to Red
+              nv1.setPenValue(penValue, isFilled)
+            } else {
+              penValue = nv1.opts.penValue
+            }
+            nv1.opts.clickToSegment = true
+            nv1.opts.clickToSegmentAutoIntensity = true
+            isDrawingEnabled = true
+            break
+          default:
+            console.warn('Unknown draw command:', id)
+            isDrawingEnabled = nv1.opts.drawingEnabled
+            break
+        }
+
+        nv1.setDrawingEnabled(isDrawingEnabled)
+        if (id !== '@Off' && id !== '@ClickToSegmentAuto') {
+          nv1.setPenValue(penValue, isFilled)
+        }
+        toggleGroup(id)
+      } else if (id.startsWith('|')) {
+        switch (id) {
+          case '|Axial':
+            nv1.setSliceType(nv1.sliceTypeAxial)
+            break
+          case '|Coronal':
+            nv1.setSliceType(nv1.sliceTypeCoronal)
+            break
+          case '|Sagittal':
+            nv1.setSliceType(nv1.sliceTypeSagittal)
+            break
+          case '|Render':
+            nv1.setSliceType(nv1.sliceTypeRender)
+            break
+          case '|MultiPlanar':
+            nv1.opts.multiplanarShowRender = niivue.SHOW_RENDER.NEVER
+            nv1.setSliceType(nv1.sliceTypeMultiplanar)
+            break
+          case '|MultiPlanarRender':
+            nv1.opts.multiplanarShowRender = niivue.SHOW_RENDER.ALWAYS
+            nv1.setSliceType(nv1.sliceTypeMultiplanar)
+            break
+        }
+        toggleGroup(id)
+      } else if (id.startsWith('^')) {
+        let s = id.substring(1)
+        switch (s) {
+          case 'none':
+            nv1.opts.dragMode = nv1.dragModes.none
+            break
+          case 'contrast':
+            nv1.opts.dragMode = nv1.dragModes.contrast
+            break
+          case 'measurement':
+            nv1.opts.dragMode = nv1.dragModes.measurement
+            break
+          case 'pan':
+            nv1.opts.dragMode = nv1.dragModes.pan
+            break
+        }
+        toggleGroup(id)
+      } else if (id.startsWith('_')) {
+        if (nv1.drawBitmap) {
+          window.alert("Close open drawing before opening a new volume.")
+          return;
+        }
+        nv1.meshes = [] //close open meshes
+        let root = '/disabled-upstream-examples/' // Adjust path if needed
+        let s = id.substring(1)
+        if (s === 'mesh') {
+          volumeList1[0].url = root + 'mni152.nii.gz'
+          await nv1.loadVolumes(volumeList1)
+          nv1.loadMeshes([
+            { url: root + 'BrainMesh_ICBM152.lh.mz3', rgba255: [200, 162, 255, 255] },
+            { url: root + 'dpsv.trx', rgba255: [255, 255, 255, 255] }
+          ])
+        } else {
+          let img = root + s + '.nii.gz'
+          console.log('Loading ' + img)
+          volumeList1[0].url = img
+          await nv1.loadVolumes(volumeList1)
+        }
+        toggleGroup(id)
+      }
+    } // end !handled block
+  } // onButtonClick()
+
+  var buttons = document.getElementsByClassName('viewBtn')
+  for (let i = 0; i < buttons.length; i++) {
+    buttons[i].addEventListener('click', onButtonClick)
+  }
+</script>

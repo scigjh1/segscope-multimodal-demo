@@ -1,0 +1,371 @@
+import { beforeEach, describe, expect, it } from 'vitest';
+import { nextTick } from 'vue';
+
+import { fillHoles } from '@/src/segmentation/editing/algorithms/fillHoles';
+import { messageTitles } from '@/src/components/__tests__/messageDisplay';
+import {
+  ProcessType,
+  usePaintProcessStore,
+  type ProcessAlgorithm,
+  type ProcessTarget,
+} from '@/src/segmentation/editing/paintProcess';
+import { useViewStore } from '@/src/store/views';
+import {
+  activateAppPinia,
+  addMask,
+  deleteSegmentOf,
+  markedVoxels,
+  maskValueAt,
+  seatImage,
+  store,
+  type Index3,
+  selectSegment,
+  lockSegment,
+} from '@/src/segmentation/__tests__/segmentMaskFixtures';
+import { SEGMENT_VALUE } from '@/src/segmentation/masks/labelValue';
+
+// ---------------------------------------------------------------------------
+// An all-segments process is one run per editable segment, each on that
+// segment's own bounded mask. Storage is a mask per segment and a mask holds
+// one label, so there is no composite to run the algorithm over once.
+//
+// Each segment fills only what it encloses by itself, so a cavity two segments
+// close together is not filled.
+//
+// A fill writes into empty space only. Both segment scopes stop at a voxel
+// another segment holds, locked or not, so no run of a process takes a voxel
+// from a segment the user did not aim at.
+// ---------------------------------------------------------------------------
+
+const SIZE = 7;
+const DIMENSIONS: Index3 = [SIZE, SIZE, 1];
+
+/** A segment covering the whole slice, marked at the named cells. */
+function segmentAt(name: string, cells: Array<[number, number]>) {
+  const maskId = addMask('img-1', name);
+  const voxels = store().maskVoxels(maskId);
+  voxels.materialize();
+  voxels.ensureContains([0, SIZE - 1, 0, SIZE - 1, 0, 0]);
+  const scalars = voxels.scalars();
+  cells.forEach(([i, j]) => {
+    scalars[i + j * SIZE] = SEGMENT_VALUE;
+  });
+  voxels.image().modified();
+  return maskId;
+}
+
+const ringAround = (ci: number, cj: number): Array<[number, number]> =>
+  [-1, 0, 1].flatMap((dj) =>
+    [-1, 0, 1]
+      .filter((di) => di !== 0 || dj !== 0)
+      .map((di) => [ci + di, cj + dj] as [number, number])
+  );
+
+const boxOutline = (from: number, to: number): Array<[number, number]> =>
+  Array.from({ length: to - from + 1 }, (_, n) => from + n).flatMap((n) => [
+    [n, from] as [number, number],
+    [n, to] as [number, number],
+    [from, n] as [number, number],
+    [to, n] as [number, number],
+  ]);
+
+const block = (from: number, to: number): Array<[number, number]> =>
+  Array.from({ length: to - from + 1 }, (_, n) => from + n).flatMap((j) =>
+    Array.from(
+      { length: to - from + 1 },
+      (_, n) => [from + n, j] as [number, number]
+    )
+  );
+
+const fillHolesOn = async (target: ProcessTarget) => ({
+  scalars: fillHoles({
+    data: target.scalars,
+    dimensions: target.dimensions as Index3,
+    axis: 2,
+    sliceIndex: 0,
+  }).out,
+  extent: target.maskExtent,
+});
+
+const recordingTargets = () => {
+  const seen: ProcessTarget[] = [];
+  const algorithm = (target: ProcessTarget) => {
+    seen.push(target);
+    return fillHolesOn(target);
+  };
+  return { seen, algorithm };
+};
+
+const runOverEverySegment = (algorithm: ProcessAlgorithm = fillHolesOn) =>
+  usePaintProcessStore().startProcess(algorithm, {
+    requiresActiveSegment: false,
+  });
+
+describe('a process running over every segment', () => {
+  beforeEach(async () => {
+    activateAppPinia();
+    await seatImage('img-1', { dimensions: DIMENSIONS });
+    useViewStore().setDataForAllViews('img-1');
+  });
+
+  it('fills the holes of every segment in one pass', async () => {
+    const left = segmentAt('Left', ringAround(1, 1));
+    const right = segmentAt('Right', ringAround(5, 5));
+
+    await runOverEverySegment();
+    usePaintProcessStore().confirmProcess();
+
+    expect(maskValueAt(left, [1, 1, 0])).toBe(SEGMENT_VALUE);
+    expect(maskValueAt(right, [5, 5, 0])).toBe(SEGMENT_VALUE);
+  });
+
+  it('stops filling a cavity two segments only close together', async () => {
+    // Neither segment encloses the cavity alone, so it stays background: the
+    // accepted cost of running per segment.
+    const left = segmentAt('Left', [
+      [0, 0],
+      [1, 0],
+      [2, 0],
+      [0, 1],
+      [0, 2],
+      [1, 2],
+      [2, 2],
+    ]);
+    const right = segmentAt('Right', [
+      [3, 0],
+      [4, 0],
+      [5, 0],
+      [5, 1],
+      [3, 2],
+      [4, 2],
+      [5, 2],
+    ]);
+
+    await runOverEverySegment();
+    usePaintProcessStore().confirmProcess();
+
+    expect(maskValueAt(left, [2, 1, 0])).toBe(0);
+    expect(maskValueAt(right, [3, 1, 0])).toBe(0);
+  });
+
+  it('leaves a segment nested inside another holding every voxel', async () => {
+    const outer = segmentAt('Outer', boxOutline(1, 5));
+    const inner = segmentAt('Inner', block(2, 4));
+    const held = markedVoxels(inner);
+
+    await runOverEverySegment();
+    usePaintProcessStore().confirmProcess();
+
+    expect(markedVoxels(inner)).toEqual(held);
+    expect(maskValueAt(outer, [3, 3, 0])).toBe(0);
+  });
+
+  it.each([
+    ['an unlocked', false],
+    ['a locked', true],
+  ])('leaves %s enclosed neighbor holding the voxel', async (_name, locked) => {
+    const ring = segmentAt('Ring', ringAround(1, 1));
+    const inside = segmentAt('Inside', [[1, 1]]);
+    lockSegment(inside, locked);
+
+    await runOverEverySegment();
+    usePaintProcessStore().confirmProcess();
+
+    expect(maskValueAt(inside, [1, 1, 0])).toBe(SEGMENT_VALUE);
+    expect(maskValueAt(ring, [1, 1, 0])).toBe(0);
+  });
+
+  it('gives a voxel nobody held to the first segment that fills it', async () => {
+    // Both enclose (3, 3) by themselves. The earlier run writes it, and the
+    // later one finds it held and leaves it, so it is not taken back.
+    const inner = segmentAt('Inner', ringAround(3, 3));
+    const outer = segmentAt('Outer', boxOutline(1, 5));
+
+    await runOverEverySegment();
+    usePaintProcessStore().confirmProcess();
+
+    expect(maskValueAt(inner, [3, 3, 0])).toBe(SEGMENT_VALUE);
+    expect(maskValueAt(outer, [3, 3, 0])).toBe(0);
+    expect(maskValueAt(inner, [2, 2, 0])).toBe(SEGMENT_VALUE);
+    expect(maskValueAt(outer, [2, 2, 0])).toBe(0);
+  });
+
+  it('skips a locked segment, which is not editable', async () => {
+    const locked = segmentAt('Locked', ringAround(1, 1));
+    const open = segmentAt('Open', ringAround(5, 5));
+    lockSegment(locked, true);
+
+    await runOverEverySegment();
+    usePaintProcessStore().confirmProcess();
+
+    expect(maskValueAt(locked, [1, 1, 0])).toBe(0);
+    expect(maskValueAt(open, [5, 5, 0])).toBe(SEGMENT_VALUE);
+  });
+
+  it('runs once per editable segment on its own mask, in registry order', async () => {
+    const left = segmentAt('Left', ringAround(1, 1));
+    const right = segmentAt('Right', ringAround(5, 5));
+    const { seen, algorithm } = recordingTargets();
+
+    await runOverEverySegment(algorithm);
+
+    expect(seen.map((target) => target.maskId)).toEqual([left, right]);
+    expect(seen.map((target) => target.scalars.filter(Boolean).length)).toEqual(
+      [8, 8]
+    );
+  });
+
+  it('skips a segment that holds no voxels', async () => {
+    const filled = segmentAt('Filled', ringAround(1, 1));
+    store().maskVoxels(addMask('img-1', 'Empty')).materialize();
+    const { seen, algorithm } = recordingTargets();
+
+    await runOverEverySegment(algorithm);
+
+    expect(seen.map((target) => target.maskId)).toEqual([filled]);
+  });
+
+  it('restores every segment when the preview is cancelled', async () => {
+    const left = segmentAt('Left', ringAround(1, 1));
+    const right = segmentAt('Right', ringAround(5, 5));
+
+    await runOverEverySegment();
+    expect(maskValueAt(left, [1, 1, 0])).toBe(SEGMENT_VALUE);
+    expect(maskValueAt(right, [5, 5, 0])).toBe(SEGMENT_VALUE);
+
+    usePaintProcessStore().cancelProcess();
+
+    expect(maskValueAt(left, [1, 1, 0])).toBe(0);
+    expect(maskValueAt(right, [5, 5, 0])).toBe(0);
+  });
+
+  it('shows the original in every segment while the preview is toggled', async () => {
+    const left = segmentAt('Left', ringAround(1, 1));
+    const right = segmentAt('Right', ringAround(5, 5));
+    const processStore = usePaintProcessStore();
+
+    await runOverEverySegment();
+    processStore.setShowingOriginal(true);
+
+    expect(maskValueAt(left, [1, 1, 0])).toBe(0);
+    expect(maskValueAt(right, [5, 5, 0])).toBe(0);
+
+    processStore.setShowingOriginal(false);
+
+    expect(maskValueAt(left, [1, 1, 0])).toBe(SEGMENT_VALUE);
+    expect(maskValueAt(right, [5, 5, 0])).toBe(SEGMENT_VALUE);
+  });
+
+  it('drops the run of a segment its algorithm had nothing to do to', async () => {
+    // Defaults are current slice plus every segment, so a segment the slice
+    // misses is the common case. Nothing is copied out for it, nothing is
+    // written back, and the renderer is not told its mask changed.
+    const filled = segmentAt('Filled', ringAround(1, 1));
+    const spared = segmentAt('Spared', ringAround(5, 5));
+    const sparedMask = store().maskVoxels(spared).image();
+    const held = markedVoxels(spared);
+    const sparedTime = sparedMask.getMTime();
+
+    await runOverEverySegment(async (target) =>
+      target.maskId === spared ? undefined : fillHolesOn(target)
+    );
+
+    expect(maskValueAt(filled, [1, 1, 0])).toBe(SEGMENT_VALUE);
+    expect(sparedMask.getMTime()).toBe(sparedTime);
+
+    usePaintProcessStore().cancelProcess();
+
+    expect(markedVoxels(spared)).toEqual(held);
+    expect(sparedMask.getMTime()).toBe(sparedTime);
+  });
+
+  it('says so when no segment had anything for the pass to do', async () => {
+    segmentAt('Left', ringAround(1, 1));
+    segmentAt('Right', ringAround(5, 5));
+
+    await runOverEverySegment(async () => undefined);
+
+    expect(usePaintProcessStore().processState.step).toBe('start');
+    expect(
+      messageTitles().some((title) => title.includes('nothing to do'))
+    ).toBe(true);
+  });
+
+  it('keeps the preview when the selection moves to another segment', async () => {
+    // The run covers every editable segment, so the selection it started under
+    // is not part of its target and moving off it takes nothing away.
+    const left = segmentAt('Left', ringAround(1, 1));
+    const right = segmentAt('Right', ringAround(5, 5));
+    selectSegment(left);
+
+    await runOverEverySegment();
+    selectSegment(right);
+    await nextTick();
+
+    expect(usePaintProcessStore().processState.step).toBe('previewing');
+    expect(maskValueAt(left, [1, 1, 0])).toBe(SEGMENT_VALUE);
+    expect(maskValueAt(right, [5, 5, 0])).toBe(SEGMENT_VALUE);
+  });
+
+  it.each([
+    [
+      'another image is viewed',
+      async () => {
+        useViewStore().setDataForAllViews('img-2');
+        await nextTick();
+      },
+    ],
+    [
+      'the process type changes',
+      async () =>
+        usePaintProcessStore().setActiveProcessType(ProcessType.GaussianSmooth),
+    ],
+  ])('rolls every segment back when %s', async (_name, leave) => {
+    await seatImage('img-2', { dimensions: DIMENSIONS });
+    const left = segmentAt('Left', ringAround(1, 1));
+    const right = segmentAt('Right', ringAround(5, 5));
+    await runOverEverySegment();
+    expect(maskValueAt(left, [1, 1, 0])).toBe(SEGMENT_VALUE);
+
+    await leave();
+
+    expect(usePaintProcessStore().processState.step).toBe('start');
+    expect(maskValueAt(left, [1, 1, 0])).toBe(0);
+    expect(maskValueAt(right, [5, 5, 0])).toBe(0);
+  });
+
+  it('drops the preview when a segment it holds a snapshot of is deleted', async () => {
+    // Deleting a mask cancels the held preview first, so nothing writes back
+    // into dead storage.
+    const left = segmentAt('Left', ringAround(1, 1));
+    const right = segmentAt('Right', ringAround(5, 5));
+    selectSegment(left);
+
+    await runOverEverySegment();
+    deleteSegmentOf(right);
+
+    expect(usePaintProcessStore().processState.step).toBe('start');
+    expect(maskValueAt(left, [1, 1, 0])).toBe(0);
+  });
+
+  it('writes no segment when a later result does not fit', async () => {
+    const left = segmentAt('Left', ringAround(1, 1));
+    const right = segmentAt('Right', ringAround(5, 5));
+    let calls = 0;
+
+    // Every result is checked before any is written.
+    await runOverEverySegment(async (target) => {
+      calls += 1;
+      return calls === 1
+        ? fillHolesOn(target)
+        : { scalars: new Uint8Array(3), extent: target.maskExtent };
+    });
+
+    expect(usePaintProcessStore().processState.step).toBe('start');
+    expect(maskValueAt(left, [1, 1, 0])).toBe(0);
+    expect(maskValueAt(right, [5, 5, 0])).toBe(0);
+    expect(
+      messageTitles().some((title) => title.includes('Operation Failed'))
+    ).toBe(true);
+  });
+});

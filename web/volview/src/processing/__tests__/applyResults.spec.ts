@@ -1,0 +1,552 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createPinia, setActivePinia } from 'pinia';
+
+import {
+  applyIntent,
+  autoLoadProcessingResults,
+  type ApplyDependencies,
+} from '@/src/processing/applyResults';
+import type {
+  ProcessingResult,
+  SubmittedJobContext,
+} from '@/src/processing/types';
+import type { ResultSource } from '@/backend-contract';
+import {
+  messageTitles,
+  mountMessageCenter,
+} from '@/src/components/__tests__/messageDisplay';
+
+// ---------------------------------------------------------------------------
+// Intent routing: which scene edge each result intent reaches for, and what it
+// reports back. The download, import and scene-mutation edges are handed in as
+// recorders, so the decisions are exercised without a loaded scene; the message
+// store is the real one.
+// ---------------------------------------------------------------------------
+
+const recordingDependencies = () => ({
+  fetchResult: vi.fn(),
+  openVolumeUrls: vi.fn(async () => ['dataset-live']),
+  importVolume: vi.fn(async (): Promise<string | null> => 'child-selection'),
+  removeDataset: vi.fn(),
+  addLayer: vi.fn(async (): Promise<string | undefined> => 'layer-1'),
+  segmentWriter: {
+    resultSourcesInScene: vi.fn((): Array<ResultSource | undefined> => []),
+    convertImageToLabelmap: vi.fn<
+      ApplyDependencies['segmentWriter']['convertImageToLabelmap']
+    >(async () => []),
+  },
+});
+
+let deps = recordingDependencies();
+
+const apply = (
+  resultIntent: Parameters<typeof applyIntent>[0],
+  jobContext: Parameters<typeof applyIntent>[1]
+) => applyIntent(resultIntent, jobContext, deps);
+
+const autoLoad = (
+  results: ProcessingResult[],
+  jobContext: SubmittedJobContext | undefined
+) => autoLoadProcessingResults(results, jobContext, deps);
+
+const file = { id: 'r1', url: 'https://example/out.nrrd', name: 'out.nrrd' };
+const rgba = (r: number, g: number, b: number, a: number) =>
+  [r, g, b, a] as [number, number, number, number];
+
+const context = (activeDatasetId?: string): SubmittedJobContext => ({
+  jobId: 'j1',
+  taskId: 't1',
+  providerId: 'p1',
+  submittedAt: '2026-06-16T00:00:00Z',
+  activeDatasetId,
+});
+
+// The provenance the client mints for a result whose producer sent none: the
+// job it submitted plus the result row it is applying.
+const mintedSource = (outputId: string) => ({
+  providerId: 'p1',
+  jobId: 'j1',
+  outputId,
+});
+
+const result = (
+  overrides: Partial<ProcessingResult> = {}
+): ProcessingResult => ({
+  id: 'r1',
+  name: file.name,
+  url: file.url,
+  ...overrides,
+});
+
+beforeEach(() => {
+  setActivePinia(createPinia());
+  deps = recordingDependencies();
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
+describe('applyIntent', () => {
+  it('add-base-image opens the file as a new dataset', async () => {
+    const applied = await apply(
+      { intent: 'add-base-image', ...file },
+      context('parent')
+    );
+    expect(applied.status).toBe('applied');
+    expect(deps.openVolumeUrls).toHaveBeenCalledWith({
+      urls: [file.url],
+      names: [file.name],
+    });
+    expect(deps.addLayer).not.toHaveBeenCalled();
+    expect(deps.segmentWriter.convertImageToLabelmap).not.toHaveBeenCalled();
+  });
+
+  it('add-layer attaches a layer onto the originating dataset', async () => {
+    const applied = await apply(
+      { intent: 'add-layer', ...file },
+      context('parent')
+    );
+    expect(applied.status).toBe('applied');
+    expect(deps.addLayer).toHaveBeenCalledWith('parent', 'child-selection');
+    expect(deps.importVolume).toHaveBeenCalledWith(
+      expect.objectContaining({ url: file.url, name: file.name })
+    );
+    expect(deps.openVolumeUrls).not.toHaveBeenCalled();
+  });
+
+  it('add-layer with no originating dataset falls back to opening', async () => {
+    await apply({ intent: 'add-layer', ...file }, context(undefined));
+    expect(deps.addLayer).not.toHaveBeenCalled();
+    expect(deps.openVolumeUrls).toHaveBeenCalledWith({
+      urls: [file.url],
+      names: [file.name],
+    });
+  });
+
+  it('passes explicit descriptors into labelmap conversion', async () => {
+    const segments = [
+      { value: 1, name: 'liver', color: rgba(255, 0, 0, 255) },
+      { value: 2, name: 'tumor', color: rgba(0, 255, 0, 255), visible: false },
+    ];
+    await apply(
+      { intent: 'import-segmentation', ...file, segments },
+      context('parent')
+    );
+    expect(deps.segmentWriter.convertImageToLabelmap).toHaveBeenCalledWith(
+      'child-selection',
+      'parent',
+      { source: mintedSource('r1'), descriptions: segments }
+    );
+    expect(deps.openVolumeUrls).not.toHaveBeenCalled();
+  });
+
+  it('import-segmentation removes the temporarily imported child dataset', async () => {
+    const outcome = await apply(
+      { intent: 'import-segmentation', ...file },
+      context('parent')
+    );
+    expect(outcome.status).toBe('applied');
+    expect(deps.removeDataset).toHaveBeenCalledWith('child-selection');
+    expect(deps.removeDataset.mock.invocationCallOrder[0]).toBeGreaterThan(
+      deps.segmentWriter.convertImageToLabelmap.mock.invocationCallOrder[0]
+    );
+  });
+
+  it('import-segmentation removes the imported child even when conversion fails', async () => {
+    deps.segmentWriter.convertImageToLabelmap.mockRejectedValue(
+      new Error('bounds do not intersect')
+    );
+    const outcome = await apply(
+      { intent: 'import-segmentation', ...file },
+      context('parent')
+    );
+    expect(outcome.status).toBe('failed');
+    expect(deps.removeDataset).toHaveBeenCalledWith('child-selection');
+  });
+
+  it('add-layer keeps its imported child dataset (the layer references it)', async () => {
+    const outcome = await apply(
+      { intent: 'add-layer', ...file },
+      context('parent')
+    );
+    expect(outcome.status).toBe('applied');
+    expect(deps.removeDataset).not.toHaveBeenCalled();
+  });
+
+  it('import-segmentation with no segments still converts (embedded metadata)', async () => {
+    await apply({ intent: 'import-segmentation', ...file }, context('parent'));
+    expect(deps.segmentWriter.convertImageToLabelmap).toHaveBeenCalledWith(
+      'child-selection',
+      'parent',
+      { source: mintedSource('r1'), descriptions: undefined }
+    );
+  });
+
+  it('stamps structured provider-qualified provenance on the created segmentation', async () => {
+    const source = {
+      providerId: 'p1',
+      jobId: 'job-abc123',
+      outputId: 'outputLabelmap',
+    };
+    await apply(
+      { intent: 'import-segmentation', ...file, source },
+      context('parent')
+    );
+    expect(deps.segmentWriter.convertImageToLabelmap).toHaveBeenCalledWith(
+      'child-selection',
+      'parent',
+      { source: source, descriptions: undefined }
+    );
+  });
+
+  it('treats a restored segmentation result as already applied', async () => {
+    const source = {
+      providerId: 'p1',
+      jobId: 'job-abc123',
+      outputId: 'outputLabelmap',
+    };
+    deps.segmentWriter.resultSourcesInScene.mockReturnValue([source]);
+
+    const outcome = await apply(
+      { intent: 'import-segmentation', ...file, source },
+      context('parent')
+    );
+
+    expect(outcome.status).toBe('applied');
+    expect(deps.importVolume).not.toHaveBeenCalled();
+    expect(deps.segmentWriter.convertImageToLabelmap).not.toHaveBeenCalled();
+    expect(deps.openVolumeUrls).not.toHaveBeenCalled();
+  });
+
+  type Source = { providerId: string; jobId: string; outputId: string };
+
+  const expectAppliedBeside = async (inScene: Source, source: Source) => {
+    deps.segmentWriter.resultSourcesInScene.mockReturnValue([inScene]);
+
+    const outcome = await apply(
+      { intent: 'import-segmentation', ...file, source },
+      context('parent')
+    );
+
+    expect(outcome.status).toBe('applied');
+    expect(deps.segmentWriter.convertImageToLabelmap).toHaveBeenCalledWith(
+      'child-selection',
+      'parent',
+      { source: source, descriptions: undefined }
+    );
+  };
+
+  it('applies a different output from the same restored job', () =>
+    expectAppliedBeside(
+      { providerId: 'p1', jobId: 'job-abc123', outputId: 'existing-output' },
+      { providerId: 'p1', jobId: 'job-abc123', outputId: 'new-output' }
+    ));
+
+  it('applies matching raw job and output ids from a different provider', () =>
+    expectAppliedBeside(
+      { providerId: 'provider-a', jobId: '1', outputId: 'seg' },
+      { providerId: 'provider-b', jobId: '1', outputId: 'seg' }
+    ));
+
+  it('does not infer an application receipt when provenance is absent', async () => {
+    deps.segmentWriter.resultSourcesInScene.mockReturnValue([undefined]);
+
+    const outcome = await apply(
+      { intent: 'import-segmentation', ...file },
+      context('parent')
+    );
+
+    expect(outcome.status).toBe('applied');
+    expect(deps.segmentWriter.convertImageToLabelmap).toHaveBeenCalledTimes(1);
+  });
+
+  // The producer may omit the optional `source`, leaving nothing in the scene
+  // to say the result was applied. The client mints the key instead, so the
+  // second Load recognizes it.
+  it('recognizes the provenance it minted for a source-less result', async () => {
+    await apply({ intent: 'import-segmentation', ...file }, context('parent'));
+
+    // What a save and restore hand back: the receipt the first Load wrote.
+    deps.segmentWriter.resultSourcesInScene.mockReturnValue([
+      mintedSource('r1'),
+    ]);
+    const outcome = await apply(
+      { intent: 'import-segmentation', ...file },
+      context('parent')
+    );
+
+    expect(outcome.status).toBe('applied');
+    expect(deps.segmentWriter.convertImageToLabelmap).toHaveBeenCalledTimes(1);
+  });
+
+  it('import-segmentation with no originating dataset falls back to opening', async () => {
+    await apply({ intent: 'import-segmentation', ...file }, context(undefined));
+    expect(deps.segmentWriter.convertImageToLabelmap).not.toHaveBeenCalled();
+    expect(deps.openVolumeUrls).toHaveBeenCalledWith({
+      urls: [file.url],
+      names: [file.name],
+    });
+  });
+
+  it('import-segmentation reports an explicit failure when the result fails to load (#7)', async () => {
+    deps.importVolume.mockResolvedValue(null);
+    const applied = await apply(
+      { intent: 'import-segmentation', ...file },
+      context('parent')
+    );
+    expect(deps.segmentWriter.convertImageToLabelmap).not.toHaveBeenCalled();
+    expect(applied.status).toBe('failed');
+    expect(messageTitles()).toEqual([]);
+  });
+
+  it('add-layer reports an explicit failure when the result fails to load (#7)', async () => {
+    deps.importVolume.mockResolvedValue(null);
+    const applied = await apply(
+      { intent: 'add-layer', ...file },
+      context('parent')
+    );
+    expect(deps.addLayer).not.toHaveBeenCalled();
+    expect(applied.status).toBe('failed');
+    expect(messageTitles()).toEqual([]);
+  });
+
+  it('resolves to failed (never rejects) when the fallback open throws', async () => {
+    deps.openVolumeUrls.mockRejectedValue(new Error('bad result url'));
+    const applied = await apply(
+      { intent: 'add-base-image', ...file },
+      context('parent')
+    );
+    expect(applied.status).toBe('failed');
+  });
+
+  it('add-layer reports failure when the layer fails to build (addLayer swallows the throw)', async () => {
+    deps.addLayer.mockResolvedValue(undefined);
+    const applied = await apply(
+      { intent: 'add-layer', ...file },
+      context('parent')
+    );
+    expect(deps.addLayer).toHaveBeenCalledWith('parent', 'child-selection');
+    expect(applied.status).toBe('failed');
+    expect(deps.removeDataset).toHaveBeenCalledWith('child-selection');
+    expect(messageTitles()).toEqual([]);
+  });
+});
+
+describe('autoLoadProcessingResults', () => {
+  it('routes every supported intent through the shared applier', async () => {
+    await autoLoad(
+      [
+        result({ id: 'a', intent: 'add-base-image' }),
+        result({ id: 'b', intent: 'add-layer' }),
+        result({
+          id: 'c',
+          intent: 'import-segmentation',
+          source: { providerId: 'p1', jobId: 'j1', outputId: 'seg' },
+          segments: [{ value: 1, name: 'liver', color: rgba(1, 2, 3, 4) }],
+        }),
+      ],
+      context('parent')
+    );
+    expect(deps.segmentWriter.convertImageToLabelmap).toHaveBeenCalledTimes(1);
+    expect(deps.segmentWriter.convertImageToLabelmap).toHaveBeenCalledWith(
+      'child-selection',
+      'parent',
+      {
+        source: { providerId: 'p1', jobId: 'j1', outputId: 'seg' },
+        descriptions: [{ value: 1, name: 'liver', color: rgba(1, 2, 3, 4) }],
+      }
+    );
+    expect(deps.openVolumeUrls).toHaveBeenCalledTimes(1);
+    expect(deps.openVolumeUrls).toHaveBeenCalledWith({
+      urls: [file.url],
+      names: [file.name],
+    });
+    expect(deps.addLayer).toHaveBeenCalledWith('parent', 'child-selection');
+  });
+
+  it('does not auto-apply an unknown intent', async () => {
+    await autoLoad([result({ intent: 'add-polygon' })], context('parent'));
+    expect(deps.segmentWriter.convertImageToLabelmap).not.toHaveBeenCalled();
+    expect(deps.openVolumeUrls).not.toHaveBeenCalled();
+  });
+
+  it('says which result was skipped and why, naming the intent', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    await autoLoad(
+      [result({ name: 'seg.nrrd', intent: 'add-polygon' })],
+      context('parent')
+    );
+    expect(messageTitles()).toEqual(['Did not load seg.nrrd']);
+    expect(mountMessageCenter().get('.details').text()).toContain(
+      'add-polygon'
+    );
+  });
+
+  it('imports a segmentation a 0.2.0 backend still names add-segment-group', async () => {
+    await autoLoad(
+      [result({ name: 'seg.nrrd', intent: 'add-segment-group' })],
+      context('parent')
+    );
+    expect(deps.segmentWriter.convertImageToLabelmap).toHaveBeenCalledTimes(1);
+    expect(messageTitles()).toEqual([]);
+  });
+
+  it('blames the payload, not the client, for a known intent it rejects', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    // import-segmentation is routed, but a three-component color fails the
+    // segment descriptor, so the result carries no directive.
+    await autoLoad(
+      [
+        result({
+          name: 'otsu.nii.gz',
+          intent: 'import-segmentation',
+          segments: [
+            { value: 1, name: 'Bin 1', color: [255, 0, 0] },
+          ] as unknown as ProcessingResult['segments'],
+        }),
+      ],
+      context('parent')
+    );
+    expect(deps.segmentWriter.convertImageToLabelmap).not.toHaveBeenCalled();
+    expect(messageTitles()).toEqual(['Did not load otsu.nii.gz']);
+    expect(mountMessageCenter().get('.details').text()).toContain(
+      'import-segmentation'
+    );
+    expect(mountMessageCenter().get('.details').text()).not.toContain(
+      'This version cannot apply'
+    );
+  });
+
+  it('stays quiet about a result that declares no intent', async () => {
+    await autoLoad([result()], context('parent'));
+    expect(messageTitles()).toEqual([]);
+  });
+
+  it('opens base images even when there is no originating dataset', async () => {
+    await autoLoad([result({ intent: 'add-base-image' })], context(undefined));
+    expect(deps.openVolumeUrls).toHaveBeenCalledWith({
+      urls: [file.url],
+      names: [file.name],
+    });
+    expect(deps.segmentWriter.convertImageToLabelmap).not.toHaveBeenCalled();
+  });
+
+  it('opens a parentless segmentation result as an ordinary dataset', async () => {
+    await autoLoad(
+      [result({ intent: 'import-segmentation' })],
+      context(undefined)
+    );
+    expect(deps.segmentWriter.convertImageToLabelmap).not.toHaveBeenCalled();
+    expect(deps.openVolumeUrls).toHaveBeenCalledWith({
+      urls: [file.url],
+      names: [file.name],
+    });
+  });
+
+  it('keeps applying after one segmentation result throws', async () => {
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    deps.segmentWriter.convertImageToLabelmap
+      .mockRejectedValueOnce(new Error('boom'))
+      .mockResolvedValueOnce([]);
+    const application = await autoLoad(
+      [
+        result({ id: 'a', intent: 'import-segmentation' }),
+        result({ id: 'b', intent: 'import-segmentation' }),
+      ],
+      context('parent')
+    );
+    expect(deps.segmentWriter.convertImageToLabelmap).toHaveBeenCalledTimes(2);
+    expect(err).toHaveBeenCalled();
+    expect(application.failedResultIds).toEqual(['a']);
+  });
+
+  it('reports success when every known intent applies', async () => {
+    const application = await autoLoad(
+      [result({ intent: 'add-base-image' })],
+      context('parent')
+    );
+
+    expect(application.failedResultIds).toEqual([]);
+  });
+
+  it('skips a restored output while applying unmatched results from the same job', async () => {
+    const restoredSource = {
+      providerId: 'p1',
+      jobId: 'j1',
+      outputId: 'restored',
+    };
+    const newSource = {
+      providerId: 'p1',
+      jobId: 'j1',
+      outputId: 'new',
+    };
+    deps.segmentWriter.resultSourcesInScene.mockReturnValue([restoredSource]);
+
+    const application = await autoLoad(
+      [
+        result({
+          id: 'restored',
+          intent: 'import-segmentation',
+          source: restoredSource,
+        }),
+        result({
+          id: 'new',
+          intent: 'import-segmentation',
+          source: newSource,
+        }),
+      ],
+      context('parent')
+    );
+
+    expect(application.failedResultIds).toEqual([]);
+    expect(deps.importVolume).toHaveBeenCalledTimes(1);
+    expect(deps.segmentWriter.convertImageToLabelmap).toHaveBeenCalledTimes(1);
+    expect(deps.segmentWriter.convertImageToLabelmap).toHaveBeenCalledWith(
+      'child-selection',
+      'parent',
+      { source: newSource, descriptions: undefined }
+    );
+  });
+});
+
+describe('autoLoadProcessingResults — labelmap auto-apply', () => {
+  const segResult = (overrides: Partial<ProcessingResult> = {}) =>
+    result({ id: 'seg', intent: 'import-segmentation', ...overrides });
+
+  it('auto-applies an importable labelmap', async () => {
+    await autoLoad([segResult()], context('parent'));
+    expect(deps.segmentWriter.convertImageToLabelmap).toHaveBeenCalledTimes(1);
+  });
+
+  it('lets the conversion path decide whether an imported labelmap can attach', async () => {
+    await autoLoad([segResult()], context('parent'));
+    expect(deps.segmentWriter.convertImageToLabelmap).toHaveBeenCalledWith(
+      'child-selection',
+      'parent',
+      { source: mintedSource('seg'), descriptions: undefined }
+    );
+  });
+
+  it('does not auto-apply a result that fails to decode, and surfaces the failure', async () => {
+    deps.importVolume.mockResolvedValue(null);
+    await autoLoad([segResult()], context('parent'));
+    expect(deps.segmentWriter.convertImageToLabelmap).not.toHaveBeenCalled();
+    expect(messageTitles()).toHaveLength(1);
+  });
+});
+
+describe('autoLoadProcessingResults — born-persistent (no confirm gate)', () => {
+  it('applies the segmentation immediately with no confirm gate', async () => {
+    const source = { providerId: 'p1', jobId: 'j1', outputId: 'seg' };
+    await autoLoad(
+      [result({ id: 'seg', intent: 'import-segmentation', source })],
+      context('parent')
+    );
+    expect(deps.segmentWriter.convertImageToLabelmap).toHaveBeenCalledWith(
+      'child-selection',
+      'parent',
+      { source: source, descriptions: undefined }
+    );
+  });
+});

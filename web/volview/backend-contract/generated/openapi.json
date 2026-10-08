@@ -1,0 +1,2209 @@
+{
+  "openapi": "3.1.0",
+  "jsonSchemaDialect": "https://json-schema.org/draft/2020-12/schema",
+  "info": {
+    "title": "VolView neutral backend contract",
+    "version": "0.3.0",
+    "description": "DRAFT 0.x — shapes may change until a second backend passes the conformance kit (the pinned 1.0 criterion). The neutral REST surface the VolView client calls to run processing tasks against a backend. A conforming server-side BACKEND implements these endpoints and the referenced wire schemas — no VolView client change is needed to bring a new backend online. Everything here is neutral: no backend routes, ids, status enums, or URL shapes leak. The artifact version is the draft artifact version, distinct from the shape versions: the result-intent vocabulary is at version 3 (INTENT_VOCABULARY_VERSION); the task-spec shape at version 1 (specVersion)."
+  },
+  "servers": [
+    {
+      "url": "{baseUrl}",
+      "description": "The provider processing base. Context-scoped endpoints are relative to a processing context; job-addressed endpoints are keyed by job id alone. The mapping of both onto concrete URLs is the backend choice.",
+      "variables": {
+        "baseUrl": {
+          "default": "/"
+        }
+      }
+    }
+  ],
+  "tags": [
+    {
+      "name": "context",
+      "description": "Context-scoped: operate against a processing context (the collection a task runs in)."
+    },
+    {
+      "name": "job",
+      "description": "Job-addressed: keyed by the opaque job id alone and gated by the job's own access control — no context in the path."
+    }
+  ],
+  "paths": {
+    "/tasks": {
+      "get": {
+        "operationId": "listTasks",
+        "tags": [
+          "context"
+        ],
+        "summary": "List the processing tasks available in this context.",
+        "responses": {
+          "200": {
+            "description": "The available tasks as advisory summaries.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/TaskSummary"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/tasks/{taskId}/spec": {
+      "get": {
+        "operationId": "getTaskSpec",
+        "tags": [
+          "context"
+        ],
+        "summary": "Get a task's VolView task spec (the backend translates its own native task format into this neutral spec).",
+        "parameters": [
+          {
+            "name": "taskId",
+            "in": "path",
+            "required": true,
+            "description": "Opaque task identifier.",
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "^(?!\\.{1,2}$)"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The task's neutral task spec.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskSpec"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such task in this context."
+          }
+        }
+      }
+    },
+    "/tasks/{taskId}/run": {
+      "post": {
+        "operationId": "runTask",
+        "tags": [
+          "context"
+        ],
+        "summary": "Submit a task; returns an opaque job handle to poll.",
+        "parameters": [
+          {
+            "name": "taskId",
+            "in": "path",
+            "required": true,
+            "description": "Opaque task identifier.",
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "^(?!\\.{1,2}$)"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RunTaskRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The submitted job handle.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobRef"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such task in this context."
+          }
+        }
+      }
+    },
+    "/jobs": {
+      "get": {
+        "operationId": "listJobHistory",
+        "tags": [
+          "context"
+        ],
+        "summary": "The current user's complete job history, newest first.",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "Opaque continuation cursor returned by the prior page.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One bounded lightweight page; logs and parameters are absent.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobHistoryPage"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/jobs/{jobId}/detail": {
+      "get": {
+        "operationId": "getJobHistoryDetail",
+        "tags": [
+          "job"
+        ],
+        "summary": "Read logs and submitted parameters for one authorized job on demand.",
+        "parameters": [
+          {
+            "name": "jobId",
+            "in": "path",
+            "required": true,
+            "description": "Opaque job identifier.",
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "^(?!\\.{1,2}$)"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The detail-only job fields.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobHistoryDetail"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/stage": {
+      "post": {
+        "operationId": "stageInput",
+        "tags": [
+          "context"
+        ],
+        "summary": "Stage a parent-bound labelmap or annotations file as a transient input; returns backend-minted URIs the client round-trips as an InputValue at submit.",
+        "requestBody": {
+          "required": true,
+          "description": "A typed staged resource: the bytes plus their durable reference-image relationship. The descriptor `type` selects which stageable resource the bytes are; an unknown type is rejected.",
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "file": {
+                    "type": "string",
+                    "format": "binary"
+                  },
+                  "descriptor": {
+                    "$ref": "#/components/schemas/StageInputDescriptor"
+                  }
+                },
+                "required": [
+                  "file",
+                  "descriptor"
+                ],
+                "additionalProperties": false
+              },
+              "encoding": {
+                "descriptor": {
+                  "contentType": "text/plain",
+                  "description": "JSON serialization of StageInputDescriptor."
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The backend-minted URIs for the staged bytes.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StageResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/jobs/{jobId}": {
+      "get": {
+        "operationId": "getJob",
+        "tags": [
+          "job"
+        ],
+        "summary": "A job's neutral execution and result-readiness status. Poll until the job reaches a terminal state. Job-addressed: keyed by the opaque job id alone and gated by the job's own access control — no context in the path.",
+        "parameters": [
+          {
+            "name": "jobId",
+            "in": "path",
+            "required": true,
+            "description": "Opaque job identifier.",
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "^(?!\\.{1,2}$)"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The neutral job status.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NeutralJobStatus"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "operationId": "deleteJob",
+        "tags": [
+          "job"
+        ],
+        "summary": "Delete one authorized terminal execution record AND everything it owns (cascading).",
+        "description": "Deletion is CASCADING, and the cascade is normative: removing the execution record also removes the results it produced and any staged inputs it still owns. A conforming backend MUST NOT retain results for a deleted record, so a client may truthfully tell the user that deleting the job deletes its results. Only a terminal (success / error / cancelled) job is deletable; a non-terminal job is refused with 409 — cancel it and delete once it settles.",
+        "parameters": [
+          {
+            "name": "jobId",
+            "in": "path",
+            "required": true,
+            "description": "Opaque job identifier.",
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "^(?!\\.{1,2}$)"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "The job and everything it owned (results, staged inputs) were deleted."
+          },
+          "409": {
+            "description": "The job is not terminal; cancel it and re-delete once it settles."
+          }
+        }
+      }
+    },
+    "/jobs/{jobId}/results": {
+      "get": {
+        "operationId": "getJobResults",
+        "tags": [
+          "job"
+        ],
+        "summary": "A job's settled results as the { resultState, intents, missing } envelope. Partial and total output loss return an incomplete envelope.",
+        "parameters": [
+          {
+            "name": "jobId",
+            "in": "path",
+            "required": true,
+            "description": "Opaque job identifier.",
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "^(?!\\.{1,2}$)"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The resolved results as the { resultState, intents, missing } envelope (JobResults). Each entry of `intents` is a ResultIntent — a result row carrying a required `id` display key, unique within the job, and required `name`/`url`, plus optional/null `mimeType`/`size` file metadata. `missing` counts declared outputs that never arrived plus recorded outputs that cannot be read. Total loss is a valid incomplete response with an empty intents array.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobResults"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Results are still waiting, or execution made them unavailable. The typed body distinguishes retryable readiness from permanent unavailability.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobResultsError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/jobs/{jobId}/cancel": {
+      "post": {
+        "operationId": "cancelJob",
+        "tags": [
+          "job"
+        ],
+        "summary": "Best-effort cancel. Returns the job's real projected status after the attempt — never a fabricated `cancelled`; the client poller converges on whatever terminal state the backend ultimately reports. Job-addressed.",
+        "parameters": [
+          {
+            "name": "jobId",
+            "in": "path",
+            "required": true,
+            "description": "Opaque job identifier.",
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "^(?!\\.{1,2}$)"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The projected job status after the cancel attempt.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NeutralJobStatus"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "TaskSpec": {
+        "$comment": "Structural validation only. Implement backend-contract validateTaskSpecSemantics after this schema and reject every fixtures/negative payload.",
+        "type": "object",
+        "properties": {
+          "specVersion": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "allOf": [
+              {
+                "pattern": "^(?!\\.{1,2}$)"
+              },
+              {
+                "pattern": "\\S"
+              }
+            ]
+          },
+          "title": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "parameters": {
+            "type": "array",
+            "items": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "type": "string",
+                      "const": "int"
+                    },
+                    "id": {
+                      "type": "string",
+                      "pattern": "\\S"
+                    },
+                    "title": {
+                      "type": "string"
+                    },
+                    "help": {
+                      "type": "string"
+                    },
+                    "section": {
+                      "type": "string"
+                    },
+                    "order": {
+                      "type": "number"
+                    },
+                    "widget": {
+                      "type": "string"
+                    },
+                    "required": {
+                      "type": "boolean"
+                    },
+                    "min": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "max": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "step": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "default": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "id"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "type": "string",
+                      "const": "float"
+                    },
+                    "id": {
+                      "type": "string",
+                      "pattern": "\\S"
+                    },
+                    "title": {
+                      "type": "string"
+                    },
+                    "help": {
+                      "type": "string"
+                    },
+                    "section": {
+                      "type": "string"
+                    },
+                    "order": {
+                      "type": "number"
+                    },
+                    "widget": {
+                      "type": "string"
+                    },
+                    "required": {
+                      "type": "boolean"
+                    },
+                    "min": {
+                      "type": "number"
+                    },
+                    "max": {
+                      "type": "number"
+                    },
+                    "step": {
+                      "type": "number"
+                    },
+                    "default": {
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "id"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "type": "string",
+                      "const": "string"
+                    },
+                    "id": {
+                      "type": "string",
+                      "pattern": "\\S"
+                    },
+                    "title": {
+                      "type": "string"
+                    },
+                    "help": {
+                      "type": "string"
+                    },
+                    "section": {
+                      "type": "string"
+                    },
+                    "order": {
+                      "type": "number"
+                    },
+                    "widget": {
+                      "type": "string"
+                    },
+                    "required": {
+                      "type": "boolean"
+                    },
+                    "default": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "id"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "type": "string",
+                      "const": "bool"
+                    },
+                    "id": {
+                      "type": "string",
+                      "pattern": "\\S"
+                    },
+                    "title": {
+                      "type": "string"
+                    },
+                    "help": {
+                      "type": "string"
+                    },
+                    "section": {
+                      "type": "string"
+                    },
+                    "order": {
+                      "type": "number"
+                    },
+                    "widget": {
+                      "type": "string"
+                    },
+                    "required": {
+                      "type": "boolean"
+                    },
+                    "default": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "id"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "type": "string",
+                      "const": "enum"
+                    },
+                    "id": {
+                      "type": "string",
+                      "pattern": "\\S"
+                    },
+                    "title": {
+                      "type": "string"
+                    },
+                    "help": {
+                      "type": "string"
+                    },
+                    "section": {
+                      "type": "string"
+                    },
+                    "order": {
+                      "type": "number"
+                    },
+                    "widget": {
+                      "type": "string"
+                    },
+                    "required": {
+                      "type": "boolean"
+                    },
+                    "options": {
+                      "minItems": 1,
+                      "type": "array",
+                      "items": {
+                        "anyOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "number"
+                          }
+                        ]
+                      }
+                    },
+                    "default": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "number"
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "id",
+                    "options"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "type": "string",
+                      "const": "sourceRef"
+                    },
+                    "id": {
+                      "type": "string",
+                      "pattern": "\\S"
+                    },
+                    "title": {
+                      "type": "string"
+                    },
+                    "help": {
+                      "type": "string"
+                    },
+                    "section": {
+                      "type": "string"
+                    },
+                    "order": {
+                      "type": "number"
+                    },
+                    "widget": {
+                      "type": "string"
+                    },
+                    "required": {
+                      "type": "boolean"
+                    },
+                    "accepts": {
+                      "minItems": 1,
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "multiple": {
+                      "description": "When true, the parameter may take more than one staged file, listed in `uris`; when absent or false, it takes one. The client honors this for labelmap inputs, staging the active image's segmentation as overlap-free parts: when true, every mask, spread across as many files as it takes for no two masks to share a voxel; when absent or false, only the non-conflicting subset that fits one file, with the remaining masks omitted whole and reported to the user. No mask is ever clipped to fit.",
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "id",
+                    "accepts"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "type": "string",
+                      "const": "bounds"
+                    },
+                    "id": {
+                      "type": "string",
+                      "pattern": "\\S"
+                    },
+                    "title": {
+                      "type": "string"
+                    },
+                    "help": {
+                      "type": "string"
+                    },
+                    "section": {
+                      "type": "string"
+                    },
+                    "order": {
+                      "type": "number"
+                    },
+                    "widget": {
+                      "type": "string"
+                    },
+                    "required": {
+                      "type": "boolean"
+                    },
+                    "default": {
+                      "minItems": 6,
+                      "maxItems": 6,
+                      "type": "array",
+                      "prefixItems": [
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "number"
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "id"
+                  ],
+                  "additionalProperties": false
+                }
+              ]
+            }
+          },
+          "outputs": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "pattern": "\\S"
+                },
+                "title": {
+                  "type": "string"
+                },
+                "help": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string"
+                },
+                "format": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "specVersion",
+          "id",
+          "title",
+          "parameters",
+          "outputs"
+        ],
+        "additionalProperties": false
+      },
+      "InputValue": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string"
+          },
+          "format": {
+            "type": "string"
+          },
+          "uris": {
+            "minItems": 1,
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "type",
+          "uris"
+        ],
+        "additionalProperties": false
+      },
+      "StageInputDescriptor": {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "const": "labelmap"
+              },
+              "name": {
+                "type": "string",
+                "minLength": 1
+              },
+              "referenceImage": {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "image"
+                  },
+                  "format": {
+                    "type": "string"
+                  },
+                  "uris": {
+                    "minItems": 1,
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "required": [
+                  "type",
+                  "uris"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "type",
+              "name",
+              "referenceImage"
+            ],
+            "additionalProperties": false,
+            "description": "The staged bytes are a `.seg.nrrd` labelmap on the reference image's voxel grid. Label values run from 1 to N within each file, in the client's segment order, with 0 as background. Voxels are unsigned 8-bit for up to 255 labels and unsigned 16-bit beyond. Segment names and colors ride in the header."
+          },
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "const": "annotations"
+              },
+              "name": {
+                "type": "string",
+                "minLength": 1
+              },
+              "referenceImage": {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "image"
+                  },
+                  "format": {
+                    "type": "string"
+                  },
+                  "uris": {
+                    "minItems": 1,
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "required": [
+                  "type",
+                  "uris"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "type",
+              "name",
+              "referenceImage"
+            ],
+            "additionalProperties": false
+          }
+        ]
+      },
+      "NeutralJobStatus": {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "jobId": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "^(?!\\.{1,2}$)"
+              },
+              "progress": {
+                "type": "number"
+              },
+              "errorTail": {
+                "type": "string"
+              },
+              "state": {
+                "type": "string",
+                "const": "pending"
+              },
+              "resultState": {
+                "type": "string",
+                "const": "waiting"
+              }
+            },
+            "required": [
+              "jobId",
+              "state",
+              "resultState"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "jobId": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "^(?!\\.{1,2}$)"
+              },
+              "progress": {
+                "type": "number"
+              },
+              "errorTail": {
+                "type": "string"
+              },
+              "state": {
+                "type": "string",
+                "const": "running"
+              },
+              "resultState": {
+                "type": "string",
+                "const": "waiting"
+              }
+            },
+            "required": [
+              "jobId",
+              "state",
+              "resultState"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "jobId": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "^(?!\\.{1,2}$)"
+              },
+              "progress": {
+                "type": "number"
+              },
+              "errorTail": {
+                "type": "string"
+              },
+              "state": {
+                "type": "string",
+                "const": "success"
+              },
+              "resultState": {
+                "type": "string",
+                "enum": [
+                  "ready",
+                  "incomplete"
+                ]
+              }
+            },
+            "required": [
+              "jobId",
+              "state",
+              "resultState"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "jobId": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "^(?!\\.{1,2}$)"
+              },
+              "progress": {
+                "type": "number"
+              },
+              "errorTail": {
+                "type": "string"
+              },
+              "state": {
+                "type": "string",
+                "const": "error"
+              },
+              "resultState": {
+                "type": "string",
+                "const": "unavailable"
+              }
+            },
+            "required": [
+              "jobId",
+              "state",
+              "resultState"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "jobId": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "^(?!\\.{1,2}$)"
+              },
+              "progress": {
+                "type": "number"
+              },
+              "errorTail": {
+                "type": "string"
+              },
+              "state": {
+                "type": "string",
+                "const": "cancelled"
+              },
+              "resultState": {
+                "type": "string",
+                "const": "unavailable"
+              }
+            },
+            "required": [
+              "jobId",
+              "state",
+              "resultState"
+            ],
+            "additionalProperties": false
+          }
+        ]
+      },
+      "ResultIntent": {
+        "anyOf": [
+          {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "intent": {
+                    "type": "string",
+                    "const": "add-base-image"
+                  },
+                  "id": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "name": {
+                    "type": "string"
+                  },
+                  "url": {
+                    "type": "string"
+                  },
+                  "mimeType": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "size": {
+                    "anyOf": [
+                      {
+                        "type": "number",
+                        "minimum": 0
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "intent",
+                  "id",
+                  "name",
+                  "url"
+                ],
+                "additionalProperties": {}
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "intent": {
+                    "type": "string",
+                    "const": "add-layer"
+                  },
+                  "id": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "name": {
+                    "type": "string"
+                  },
+                  "url": {
+                    "type": "string"
+                  },
+                  "mimeType": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "size": {
+                    "anyOf": [
+                      {
+                        "type": "number",
+                        "minimum": 0
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "intent",
+                  "id",
+                  "name",
+                  "url"
+                ],
+                "additionalProperties": {}
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "intent": {
+                    "type": "string",
+                    "const": "import-segmentation"
+                  },
+                  "id": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "name": {
+                    "type": "string"
+                  },
+                  "url": {
+                    "type": "string"
+                  },
+                  "mimeType": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "size": {
+                    "anyOf": [
+                      {
+                        "type": "number",
+                        "minimum": 0
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "segments": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "value": {
+                          "type": "integer",
+                          "minimum": 1,
+                          "maximum": 9007199254740991,
+                          "description": "The label value, from 1 to 65535; 0 is background. The client stores labels in at most 16 bits: voxels holding a larger value import as background with a warning, and a segment declared with one arrives empty."
+                        },
+                        "name": {
+                          "type": "string",
+                          "description": "Binds the segment by exact name. A segment the client already holds under this name, with no mask on the target image yet, takes these voxels and keeps its own color and visibility. Otherwise the client creates a segment from this descriptor, with a numbered name when the existing one already has a mask on that image."
+                        },
+                        "color": {
+                          "minItems": 4,
+                          "maxItems": 4,
+                          "type": "array",
+                          "prefixItems": [
+                            {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 255
+                            },
+                            {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 255
+                            },
+                            {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 255
+                            },
+                            {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 255
+                            }
+                          ]
+                        },
+                        "visible": {
+                          "type": "boolean"
+                        }
+                      },
+                      "required": [
+                        "value",
+                        "name",
+                        "color"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "source": {
+                    "type": "object",
+                    "properties": {
+                      "providerId": {
+                        "type": "string"
+                      },
+                      "jobId": {
+                        "type": "string"
+                      },
+                      "outputId": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "providerId",
+                      "jobId",
+                      "outputId"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "required": [
+                  "intent",
+                  "id",
+                  "name",
+                  "url"
+                ],
+                "additionalProperties": {}
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "intent": {
+                    "type": "string",
+                    "const": "add-annotations"
+                  },
+                  "id": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "name": {
+                    "type": "string"
+                  },
+                  "url": {
+                    "type": "string"
+                  },
+                  "mimeType": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "size": {
+                    "anyOf": [
+                      {
+                        "type": "number",
+                        "minimum": 0
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "source": {
+                    "type": "object",
+                    "properties": {
+                      "providerId": {
+                        "type": "string"
+                      },
+                      "jobId": {
+                        "type": "string"
+                      },
+                      "outputId": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "providerId",
+                      "jobId",
+                      "outputId"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "required": [
+                  "intent",
+                  "id",
+                  "name",
+                  "url"
+                ],
+                "additionalProperties": {}
+              }
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "intent": {},
+              "id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "name": {
+                "type": "string"
+              },
+              "url": {
+                "type": "string"
+              },
+              "mimeType": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "size": {
+                "anyOf": [
+                  {
+                    "type": "number",
+                    "minimum": 0
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "id",
+              "name",
+              "url"
+            ],
+            "additionalProperties": {}
+          }
+        ]
+      },
+      "JobHistorySummary": {
+        "type": "object",
+        "properties": {
+          "jobId": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "^(?!\\.{1,2}$)"
+          },
+          "taskId": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "^(?!\\.{1,2}$)"
+          },
+          "taskTitle": {
+            "type": "string"
+          },
+          "createdBy": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "name"
+            ],
+            "additionalProperties": false
+          },
+          "createdAt": {
+            "type": "string"
+          },
+          "startedAt": {
+            "type": "string"
+          },
+          "finishedAt": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "running",
+              "success",
+              "error",
+              "cancelled"
+            ]
+          },
+          "resultState": {
+            "type": "string",
+            "enum": [
+              "waiting",
+              "ready",
+              "incomplete",
+              "unavailable"
+            ]
+          },
+          "progress": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          },
+          "outputSummary": {
+            "type": "object",
+            "properties": {
+              "recorded": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "missing": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              }
+            },
+            "required": [
+              "recorded",
+              "missing"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "jobId",
+          "taskId",
+          "taskTitle",
+          "createdBy",
+          "createdAt",
+          "state",
+          "resultState"
+        ],
+        "additionalProperties": false
+      },
+      "JobHistoryPage": {
+        "type": "object",
+        "properties": {
+          "jobs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/JobHistorySummary"
+            }
+          },
+          "nextCursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "jobs",
+          "nextCursor"
+        ],
+        "additionalProperties": false
+      },
+      "JobHistoryDetail": {
+        "type": "object",
+        "properties": {
+          "jobId": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "^(?!\\.{1,2}$)"
+          },
+          "log": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "parameters": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string"
+            },
+            "additionalProperties": {}
+          }
+        },
+        "required": [
+          "jobId",
+          "log",
+          "parameters"
+        ],
+        "additionalProperties": false
+      },
+      "JobResults": {
+        "type": "object",
+        "properties": {
+          "resultState": {
+            "type": "string",
+            "enum": [
+              "ready",
+              "incomplete"
+            ]
+          },
+          "intents": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ResultIntent"
+            }
+          },
+          "missing": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          }
+        },
+        "required": [
+          "resultState",
+          "intents",
+          "missing"
+        ],
+        "additionalProperties": false
+      },
+      "JobResultsError": {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string",
+                "const": "results_not_ready"
+              },
+              "message": {
+                "type": "string"
+              },
+              "state": {
+                "type": "string",
+                "enum": [
+                  "pending",
+                  "running"
+                ]
+              },
+              "resultState": {
+                "type": "string",
+                "const": "waiting"
+              }
+            },
+            "required": [
+              "code",
+              "message",
+              "state",
+              "resultState"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string",
+                "const": "results_unavailable"
+              },
+              "message": {
+                "type": "string"
+              },
+              "state": {
+                "type": "string",
+                "enum": [
+                  "error",
+                  "cancelled"
+                ]
+              },
+              "resultState": {
+                "type": "string",
+                "const": "unavailable"
+              }
+            },
+            "required": [
+              "code",
+              "message",
+              "state",
+              "resultState"
+            ],
+            "additionalProperties": false
+          }
+        ]
+      },
+      "AnnotationsFile": {
+        "$comment": "Structural validation only. Implement backend-contract validateAnnotationsFileSemantics after this schema: every planeNormal must be nonzero, and every nonempty labelName must be declared in its own tool-kind label namespace.",
+        "type": "object",
+        "properties": {
+          "schemaVersion": {
+            "type": "number",
+            "const": 1
+          },
+          "space": {
+            "type": "string",
+            "const": "LPS"
+          },
+          "labels": {
+            "type": "object",
+            "properties": {
+              "rulers": {
+                "type": "object",
+                "propertyNames": {
+                  "type": "string",
+                  "pattern": "^(?!__proto__$)"
+                },
+                "additionalProperties": {
+                  "type": "object",
+                  "properties": {
+                    "color": {
+                      "description": "A hex color such as `#d60000` or a CSS color keyword such as `lime`. It styles only a segment the label creates: a label whose name the client already holds keeps that segment's color and stroke width. Any other syntax, including functional forms such as `rgb()` and `hsl()`, is ignored and reported to the user, and a new segment then takes an automatic color.",
+                      "type": "string"
+                    },
+                    "strokeWidth": {
+                      "type": "number"
+                    },
+                    "fillColor": {
+                      "description": "Accepted so an existing producer keeps validating, and ignored on labels.",
+                      "type": "string"
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              },
+              "rectangles": {
+                "type": "object",
+                "propertyNames": {
+                  "type": "string",
+                  "pattern": "^(?!__proto__$)"
+                },
+                "additionalProperties": {
+                  "type": "object",
+                  "properties": {
+                    "color": {
+                      "description": "A hex color such as `#d60000` or a CSS color keyword such as `lime`. It styles only a segment the label creates: a label whose name the client already holds keeps that segment's color and stroke width. Any other syntax, including functional forms such as `rgb()` and `hsl()`, is ignored and reported to the user, and a new segment then takes an automatic color.",
+                      "type": "string"
+                    },
+                    "strokeWidth": {
+                      "type": "number"
+                    },
+                    "fillColor": {
+                      "description": "Accepted so an existing producer keeps validating, and ignored on labels.",
+                      "type": "string"
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              },
+              "polygons": {
+                "type": "object",
+                "propertyNames": {
+                  "type": "string",
+                  "pattern": "^(?!__proto__$)"
+                },
+                "additionalProperties": {
+                  "type": "object",
+                  "properties": {
+                    "color": {
+                      "description": "A hex color such as `#d60000` or a CSS color keyword such as `lime`. It styles only a segment the label creates: a label whose name the client already holds keeps that segment's color and stroke width. Any other syntax, including functional forms such as `rgb()` and `hsl()`, is ignored and reported to the user, and a new segment then takes an automatic color.",
+                      "type": "string"
+                    },
+                    "strokeWidth": {
+                      "type": "number"
+                    },
+                    "fillColor": {
+                      "description": "Accepted so an existing producer keeps validating, and ignored on labels.",
+                      "type": "string"
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            },
+            "additionalProperties": false
+          },
+          "tools": {
+            "type": "object",
+            "properties": {
+              "rulers": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "firstPoint": {
+                      "minItems": 3,
+                      "maxItems": 3,
+                      "type": "array",
+                      "prefixItems": [
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "number"
+                        }
+                      ]
+                    },
+                    "secondPoint": {
+                      "minItems": 3,
+                      "maxItems": 3,
+                      "type": "array",
+                      "prefixItems": [
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "number"
+                        }
+                      ]
+                    },
+                    "frameOfReference": {
+                      "type": "object",
+                      "properties": {
+                        "planeNormal": {
+                          "minItems": 3,
+                          "maxItems": 3,
+                          "type": "array",
+                          "prefixItems": [
+                            {
+                              "type": "number"
+                            },
+                            {
+                              "type": "number"
+                            },
+                            {
+                              "type": "number"
+                            }
+                          ]
+                        },
+                        "planeOrigin": {
+                          "minItems": 3,
+                          "maxItems": 3,
+                          "type": "array",
+                          "prefixItems": [
+                            {
+                              "type": "number"
+                            },
+                            {
+                              "type": "number"
+                            },
+                            {
+                              "type": "number"
+                            }
+                          ]
+                        }
+                      },
+                      "required": [
+                        "planeNormal",
+                        "planeOrigin"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "slice": {
+                      "type": "number"
+                    },
+                    "frame": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "labelName": {
+                      "type": "string"
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "metadata": {
+                      "type": "object",
+                      "propertyNames": {
+                        "type": "string",
+                        "pattern": "^(?!__proto__$)"
+                      },
+                      "additionalProperties": {
+                        "type": "string"
+                      }
+                    }
+                  },
+                  "required": [
+                    "firstPoint",
+                    "secondPoint",
+                    "frameOfReference"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "rectangles": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "firstPoint": {
+                      "minItems": 3,
+                      "maxItems": 3,
+                      "type": "array",
+                      "prefixItems": [
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "number"
+                        }
+                      ]
+                    },
+                    "secondPoint": {
+                      "minItems": 3,
+                      "maxItems": 3,
+                      "type": "array",
+                      "prefixItems": [
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "number"
+                        }
+                      ]
+                    },
+                    "frameOfReference": {
+                      "type": "object",
+                      "properties": {
+                        "planeNormal": {
+                          "minItems": 3,
+                          "maxItems": 3,
+                          "type": "array",
+                          "prefixItems": [
+                            {
+                              "type": "number"
+                            },
+                            {
+                              "type": "number"
+                            },
+                            {
+                              "type": "number"
+                            }
+                          ]
+                        },
+                        "planeOrigin": {
+                          "minItems": 3,
+                          "maxItems": 3,
+                          "type": "array",
+                          "prefixItems": [
+                            {
+                              "type": "number"
+                            },
+                            {
+                              "type": "number"
+                            },
+                            {
+                              "type": "number"
+                            }
+                          ]
+                        }
+                      },
+                      "required": [
+                        "planeNormal",
+                        "planeOrigin"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "slice": {
+                      "type": "number"
+                    },
+                    "frame": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "labelName": {
+                      "type": "string"
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "metadata": {
+                      "type": "object",
+                      "propertyNames": {
+                        "type": "string",
+                        "pattern": "^(?!__proto__$)"
+                      },
+                      "additionalProperties": {
+                        "type": "string"
+                      }
+                    }
+                  },
+                  "required": [
+                    "firstPoint",
+                    "secondPoint",
+                    "frameOfReference"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "polygons": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "points": {
+                      "minItems": 3,
+                      "type": "array",
+                      "items": {
+                        "minItems": 3,
+                        "maxItems": 3,
+                        "type": "array",
+                        "prefixItems": [
+                          {
+                            "type": "number"
+                          },
+                          {
+                            "type": "number"
+                          },
+                          {
+                            "type": "number"
+                          }
+                        ]
+                      }
+                    },
+                    "frameOfReference": {
+                      "type": "object",
+                      "properties": {
+                        "planeNormal": {
+                          "minItems": 3,
+                          "maxItems": 3,
+                          "type": "array",
+                          "prefixItems": [
+                            {
+                              "type": "number"
+                            },
+                            {
+                              "type": "number"
+                            },
+                            {
+                              "type": "number"
+                            }
+                          ]
+                        },
+                        "planeOrigin": {
+                          "minItems": 3,
+                          "maxItems": 3,
+                          "type": "array",
+                          "prefixItems": [
+                            {
+                              "type": "number"
+                            },
+                            {
+                              "type": "number"
+                            },
+                            {
+                              "type": "number"
+                            }
+                          ]
+                        }
+                      },
+                      "required": [
+                        "planeNormal",
+                        "planeOrigin"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "slice": {
+                      "type": "number"
+                    },
+                    "frame": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "labelName": {
+                      "type": "string"
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "metadata": {
+                      "type": "object",
+                      "propertyNames": {
+                        "type": "string",
+                        "pattern": "^(?!__proto__$)"
+                      },
+                      "additionalProperties": {
+                        "type": "string"
+                      }
+                    }
+                  },
+                  "required": [
+                    "points",
+                    "frameOfReference"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "schemaVersion",
+          "space",
+          "tools"
+        ],
+        "additionalProperties": {}
+      },
+      "TaskSummary": {
+        "type": "object",
+        "description": "Advisory display metadata for one task in the picker. Pass-through: the client renders it but validates only id/title; every other field is OPTIONAL advisory display metadata a backend MAY omit, and the client never dispatches on it.",
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "^(?!\\.{1,2}$)"
+          },
+          "title": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "category": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "id",
+          "title"
+        ],
+        "additionalProperties": true
+      },
+      "RunTaskRequest": {
+        "type": "object",
+        "description": "Submission payload. `values` maps each task parameter id to its bound value: an InputValue for an input binding, or a scalar/list for a plain parameter.",
+        "properties": {
+          "values": {
+            "type": "object",
+            "additionalProperties": {
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/InputValue"
+                },
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          }
+        },
+        "required": [
+          "values"
+        ],
+        "additionalProperties": false
+      },
+      "JobRef": {
+        "type": "object",
+        "description": "Handle to the submitted job. `jobId` is opaque. An optional terminal `status` is the born-terminal fast-path for a synchronous backend.",
+        "properties": {
+          "jobId": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "^(?!\\.{1,2}$)"
+          },
+          "status": {
+            "$ref": "#/components/schemas/NeutralJobStatus"
+          }
+        },
+        "required": [
+          "jobId"
+        ],
+        "additionalProperties": false
+      },
+      "StageResponse": {
+        "type": "object",
+        "description": "Backend-minted opaque URIs for the staged bytes. The client mints no URI itself, so at least one is required (fail closed).",
+        "properties": {
+          "uris": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "minItems": 1
+          }
+        },
+        "required": [
+          "uris"
+        ],
+        "additionalProperties": false
+      }
+    }
+  }
+}

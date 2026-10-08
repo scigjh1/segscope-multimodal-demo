@@ -1,0 +1,381 @@
+import JSZip from 'jszip';
+import { useDatasetStore } from '@/src/store/datasets';
+import { useSegmentationStore } from '@/src/segmentation/store';
+import { useSegmentStore } from '@/src/segmentation/segments';
+import { useLayersStore } from '@/src/store/datasets-layers';
+import { useToolStore } from '@/src/store/tools';
+import { Tools } from '@/src/store/tools/types';
+import { useViewStore } from '@/src/store/views';
+import {
+  Manifest,
+  ManifestSchema,
+  ParentToLayers,
+  Segmentation,
+  StateFile,
+} from '@/src/io/state-file/schema';
+
+import { retypeFile } from '@/src/io';
+import { ARCHIVE_FILE_TYPES } from '@/src/io/mimeTypes';
+import { useViewConfigStore } from '@/src/store/view-configs';
+import { useMessageStore, type MessageOptions } from '@/src/store/messages';
+import {
+  collectManifestRefs,
+  declareManifestRefs,
+  type ManifestRefKind,
+} from '@/src/core/manifestRefs';
+import { debug } from '@/src/utils/loggers';
+import { isRecord } from '@/src/utils';
+
+// `primarySelection` is a legacy manifest field with no owning store — nothing
+// writes it at save time (only migrations and restore read it) — so the
+// serializer declares its reference itself.
+declareManifestRefs('primarySelection', (manifest) =>
+  typeof manifest.primarySelection === 'string'
+    ? [
+        {
+          kind: 'dataset' as const,
+          id: manifest.primarySelection,
+          where: 'primarySelection',
+        },
+      ]
+    : []
+);
+
+export const MANIFEST = 'manifest.json';
+export const MANIFEST_VERSION = '7.0.0';
+
+type ManifestCandidate = Record<string, unknown>;
+
+const coreManifestSchema = ManifestSchema.pick({
+  version: true,
+  datasets: true,
+  dataSources: true,
+  datasetFilePath: true,
+});
+
+function validateCoreGraph(core: Manifest, zip: JSZip) {
+  if (core.version !== MANIFEST_VERSION) {
+    throw new Error(
+      `Cannot save unsupported manifest version: ${core.version}`
+    );
+  }
+  const sourceIds = new Set<number>();
+  core.dataSources.forEach((source) => {
+    if (sourceIds.has(source.id)) {
+      throw new Error(`Cannot save duplicate data source id: ${source.id}`);
+    }
+    sourceIds.add(source.id);
+  });
+
+  const dependencies = new Map<number, number[]>();
+  core.dataSources.forEach((source) => {
+    const refs = [
+      ...(source.parent == null ? [] : [source.parent]),
+      ...(source.type === 'collection' ? source.sources : []),
+    ];
+    refs.forEach((ref) => {
+      if (!sourceIds.has(ref)) {
+        throw new Error(
+          `Cannot save data source ${source.id}: referenced source ${ref} is missing`
+        );
+      }
+    });
+    dependencies.set(source.id, refs);
+    if (source.type === 'file') {
+      const path = core.datasetFilePath?.[String(source.fileId)];
+      if (!path || zip.file(path) === null) {
+        throw new Error(
+          `Cannot save data source ${source.id}: required local file is missing`
+        );
+      }
+    }
+  });
+
+  const visiting = new Set<number>();
+  const visited = new Set<number>();
+  const visit = (id: number) => {
+    if (visiting.has(id)) {
+      throw new Error(`Cannot save cyclic data source graph at ${id}`);
+    }
+    if (visited.has(id)) return;
+    visiting.add(id);
+    dependencies.get(id)?.forEach(visit);
+    visiting.delete(id);
+    visited.add(id);
+  };
+  sourceIds.forEach(visit);
+
+  const datasetIds = new Set<string>();
+  (core.datasets ?? []).forEach((dataset) => {
+    if (datasetIds.has(dataset.id)) {
+      throw new Error(`Cannot save duplicate dataset id: ${dataset.id}`);
+    }
+    if (!sourceIds.has(dataset.dataSourceId)) {
+      throw new Error(
+        `Cannot save dataset ${dataset.id}: data source ${dataset.dataSourceId} is missing`
+      );
+    }
+    datasetIds.add(dataset.id);
+  });
+  return datasetIds;
+}
+
+// Validate the source graph and saved mask files before writing an archive.
+// Optional invalid content is reported and omitted; an invalid source graph
+// aborts the save. Dataset and tool references are kept clean by their stores'
+// removal cascades and checked below in development builds.
+export function normalizeManifest(manifest: Manifest, zip: JSZip) {
+  const candidate = manifest as unknown as ManifestCandidate;
+  const core = coreManifestSchema.parse(candidate) as Manifest;
+  const datasetIds = validateCoreGraph(core, zip);
+  const omitted: string[] = [];
+
+  const rawName = (raw: unknown, fallback: string) =>
+    isRecord(raw) && typeof raw.name === 'string' ? raw.name : fallback;
+  // Read off the raw record: one that fails its schema still wrote its entries.
+  const rawMaskPaths = (raw: unknown) =>
+    (isRecord(raw) && Array.isArray(raw.masks) ? raw.masks : []).flatMap(
+      (mask: unknown) => {
+        const representations = isRecord(mask) ? mask.representations : null;
+        const labelmap = isRecord(representations)
+          ? representations.labelmap
+          : null;
+        const path = isRecord(labelmap) ? labelmap.path : null;
+        return typeof path === 'string' ? [path] : [];
+      }
+    );
+
+  const rawSegmentations = Array.isArray(candidate.segmentations)
+    ? candidate.segmentations
+    : [];
+  const validSegmentations = rawSegmentations.flatMap((raw, index) => {
+    const parsed = Segmentation.safeParse(raw);
+    const name = rawName(raw, `segmentations[${index}]`);
+    let reason: string | null = null;
+    if (!parsed.success) reason = 'invalid segmentation record';
+    else if (!datasetIds.has(parsed.data.parentImage)) {
+      reason = `parent dataset ${parsed.data.parentImage} is missing`;
+    }
+    if (!parsed.success || reason) {
+      omitted.push(`${name}: ${reason}`);
+      // Voxels of a record reported as omitted do not ship in the archive.
+      rawMaskPaths(raw).forEach((path) => zip.remove(path));
+      return [];
+    }
+
+    const masks = parsed.data.masks.map((mask) => {
+      const binding = mask.representations.labelmap;
+      if (!binding || zip.file(binding.path) !== null) return mask;
+      const unreachableReason = `archive member ${binding.path} is missing`;
+      omitted.push(`${name}.masks[${mask.id}]: ${unreachableReason}`);
+      return { ...mask, representations: {} };
+    });
+    return [{ ...parsed.data, masks }];
+  });
+
+  let validLayers: ParentToLayers | undefined;
+  if (Array.isArray(candidate.parentToLayers)) {
+    validLayers = candidate.parentToLayers.flatMap((raw, index) => {
+      const parsed = ParentToLayers.element.safeParse(raw);
+      if (
+        !parsed.success ||
+        !datasetIds.has(parsed.data.selectionKey) ||
+        parsed.data.sourceSelectionKeys.some((id) => !datasetIds.has(id))
+      ) {
+        omitted.push(`layer relationship ${index}: missing or invalid dataset`);
+        return [];
+      }
+      return [parsed.data];
+    });
+  } else if (candidate.parentToLayers !== undefined) {
+    omitted.push('parentToLayers: invalid optional state');
+  }
+
+  // Dev-only cascade-gap backstop (DCE'd in prod by the NODE_ENV guard).
+  // Referential integrity of these dataset/segment/view-keyed sections is owned
+  // by the synchronous remove cascade: a load-bearing but UNENFORCED invariant.
+  // Each cascade-owning store declares its manifest references next to its
+  // cascade registration (declareManifestRefs); walking those declarations here
+  // detects and REPORTS an orphan in dev/test without mutating output, and
+  // keeps the checker's coverage from drifting apart from the cascades.
+  if (process.env.NODE_ENV !== 'production') {
+    const resolvable: Record<ManifestRefKind, Set<string>> = {
+      dataset: datasetIds,
+      segment: new Set(
+        Array.isArray(candidate.segments)
+          ? candidate.segments.flatMap((raw) =>
+              isRecord(raw) && typeof raw.id === 'string' ? [raw.id] : []
+            )
+          : []
+      ),
+      view: new Set(
+        isRecord(candidate.viewByID) ? Object.keys(candidate.viewByID) : []
+      ),
+    };
+    const dangling = collectManifestRefs(candidate)
+      .filter((ref) => !resolvable[ref.kind].has(ref.id))
+      .map((ref) => `${ref.where} -> ${ref.kind} ${ref.id}`);
+    if (dangling.length > 0)
+      debug.warn(
+        'normalizeManifest: dangling reference(s) reached save without being ' +
+          'stripped — a store is likely missing an onImageDeleted remove-cascade ' +
+          `registration: ${dangling.join('; ')}`
+      );
+  }
+
+  // These fields jointly describe the view layout. In particular, layoutSlots
+  // and activeView only make sense when their IDs can be resolved through
+  // viewByID. If that root is invalid, omit the complete cluster rather than
+  // saving slots that cannot be restored.
+  const viewLayoutRoots = new Set([
+    'activeView',
+    'isActiveViewMaximized',
+    'viewByID',
+    'layout',
+    'layoutSlots',
+  ]);
+  const invalidViewByID =
+    candidate.viewByID !== undefined &&
+    !ManifestSchema.shape.viewByID.safeParse(candidate.viewByID).success;
+  if (invalidViewByID) {
+    omitted.push('view/layout: invalid viewByID state');
+  }
+
+  // Each remaining optional root is validated against its own field schema.
+  // ManifestSchema is a plain object with no cross-field refinement, so a
+  // field valid in isolation is valid in the full manifest — and the output
+  // is assembled from the parsed pieces, so nothing is validated (or
+  // deep-copied) twice.
+  const optionalRoots = [
+    'tools',
+    'segments',
+    'selectedSegment',
+    'activeView',
+    'isActiveViewMaximized',
+    'viewByID',
+    'primarySelection',
+    'layout',
+    'layoutSlots',
+  ] as const;
+  const optionalEntries = optionalRoots.flatMap((key) => {
+    if (invalidViewByID && viewLayoutRoots.has(key)) return [];
+    if (candidate[key] === undefined) return [];
+    const parsed = ManifestSchema.shape[key].safeParse(candidate[key]);
+    if (!parsed.success) {
+      omitted.push(`${key}: invalid optional state`);
+      return [];
+    }
+    return [[key, parsed.data] as const];
+  });
+
+  const normalized = {
+    ...core,
+    segmentations: validSegmentations,
+    ...(validLayers ? { parentToLayers: validLayers } : {}),
+    ...Object.fromEntries(optionalEntries),
+  } as Manifest;
+  return { manifest: normalized, omitted };
+}
+
+/**
+ * Everything `serialize` reaches outside itself: the writers that each
+ * contribute their slice of the manifest, in order, and the sink that reports
+ * content the normalizer had to drop.
+ */
+export type SerializeDependencies = {
+  writers: Array<(stateFile: StateFile) => void | Promise<void>>;
+  addWarning: (title: string, options: MessageOptions) => void;
+};
+
+const serializingStoreHooks = [
+  useDatasetStore,
+  useViewStore,
+  useViewConfigStore,
+  useSegmentStore,
+  useToolStore,
+  useSegmentationStore,
+  useLayersStore,
+];
+
+const storeWriter =
+  (useStore: (typeof serializingStoreHooks)[number]) =>
+  (stateFile: StateFile) =>
+    useStore().serialize(stateFile);
+
+export const appSerializeDependencies = (): SerializeDependencies => ({
+  writers: serializingStoreHooks.map(storeWriter),
+  addWarning: (title, options) => useMessageStore().addWarning(title, options),
+});
+
+export async function serialize(
+  dependencies: SerializeDependencies = appSerializeDependencies()
+) {
+  const zip = new JSZip();
+  const manifest: Manifest = {
+    version: MANIFEST_VERSION,
+    datasets: [],
+    dataSources: [],
+    datasetFilePath: {},
+    segmentations: [],
+    tools: {
+      paint: {
+        brushSize: 8,
+        crossPlaneSync: false,
+      },
+      crop: {},
+      current: Tools.WindowLevel,
+    },
+    layout: {
+      direction: 'column',
+      items: [],
+    },
+    layoutSlots: [],
+    viewByID: {},
+    isActiveViewMaximized: false,
+    parentToLayers: [],
+  };
+
+  const stateFile = {
+    zip,
+    manifest,
+  };
+
+  // Related synchronous snapshots stay together before mask encoding yields.
+  // Later writers can read manifest entries the earlier ones wrote.
+  for (const write of dependencies.writers) {
+    const pending = write(stateFile);
+    if (pending) await pending;
+  }
+  const repaired = normalizeManifest(manifest, zip);
+  if (repaired.omitted.length > 0) {
+    dependencies.addWarning('Some session content could not be saved', {
+      details: `Invalid entries were omitted: ${repaired.omitted.join(', ')}`,
+      persist: true,
+    });
+  }
+  zip.file(MANIFEST, JSON.stringify(repaired.manifest));
+
+  return zip.generateAsync({ type: 'blob' });
+}
+
+export async function isStateFile(file: File) {
+  const typedFile = await retypeFile(file);
+
+  if (ARCHIVE_FILE_TYPES.has(typedFile.type)) {
+    const zip = await JSZip.loadAsync(typedFile);
+    return zip.file(MANIFEST) !== null;
+  }
+
+  // The manifest's required keys claim a JSON even when it fails the schema,
+  // so restore reports why rather than config import misreading `segments`.
+  if (typedFile.type === 'application/json') {
+    try {
+      const raw = JSON.parse(await file.text());
+      return isRecord(raw) && 'version' in raw && 'dataSources' in raw;
+    } catch {
+      return false;
+    }
+  }
+
+  return false;
+}

@@ -1,0 +1,61 @@
+{
+  "scope": "One predeclared public AMOS22 fold1 validation case; liver label 6; not sealed test or clinical study",
+  "dataset_source": "https://github.com/Jianningli/amos",
+  "records": [
+    {
+      "case_alias": "public-validation-01",
+      "shape_zyx": [
+        103,
+        768,
+        768
+      ],
+      "spacing_zyx_mm": [
+        5.0,
+        0.5234375,
+        0.5234375
+      ],
+      "metrics": {
+        "dice": 0.962870090482826,
+        "iou": 0.928398729654881,
+        "precision": 0.9765390197743395,
+        "recall": 0.9495785357178503,
+        "hd95": 4.1875,
+        "nsd": 0.9272838374579896,
+        "surface_tolerance": 3.0,
+        "fp_voxels": 27657,
+        "fn_voxels": 61127,
+        "surface_status": "measured"
+      },
+      "runtime_ms": {
+        "preprocess_ms": 388.9114037156105,
+        "h2d_ms": 27.15928480029106,
+        "inference_ms": 3701.5822529792786,
+        "postprocess_d2h_ms": 1101.5763953328133,
+        "total_ms": 5219.229336827993
+      },
+      "memory_mib": {
+        "peak_allocated_mib": 3075.88232421875,
+        "peak_reserved_mib": 4212.0
+      },
+      "model": {
+        "id": "AnatoFluxNet-Light-Direct",
+        "version": "frozen-fold1-u7000",
+        "fingerprint": "1cd29369c33a72dfc09b20d173ae3540b1c1214d676ef869e030f603ceee083a",
+        "description": "Operator-owned 12.16M parameter 3D segmentation model; research weights remain private"
+      },
+      "precision": "fp16",
+      "device": "cuda:1",
+      "roi_size": [
+        96,
+        256,
+        256
+      ],
+      "overlap": 0.25,
+      "window_batch_size": 1
+    }
+  ],
+  "sample_count": 1,
+  "weight_selection": "Existing frozen u7000 checkpoint; no fitting/tuning in this task",
+  "raw_data_published": false,
+  "review_operations_synthetic": true
+}

@@ -1,0 +1,26 @@
+[
+  {
+    "package": "@niivue/niivue",
+    "version": "0.69.0",
+    "source": {
+      "url": "git+https://github.com/niivue/niivue.git",
+      "type": "git"
+    },
+    "tarball": "https://registry.npmjs.org/@niivue/niivue/-/niivue-0.69.0.tgz",
+    "sha256": "6e9a6a471b428eb3b258a0086beca9187d95e43a781a39e8a519c6da246af485",
+    "upstream_file": "package/dist/niivue.umd.js",
+    "license": "BSD-2-Clause"
+  },
+  {
+    "package": "@tabler/core",
+    "version": "1.6.1",
+    "source": {
+      "url": "git+https://github.com/tabler/tabler.git",
+      "type": "git"
+    },
+    "tarball": "https://registry.npmjs.org/@tabler/core/-/core-1.6.1.tgz",
+    "sha256": "d02d679e51f6c179b21f035e154c13cdcb2ae8b18579e56ea606408ba7fc7a87",
+    "upstream_file": "package/dist/css/tabler.min.css",
+    "license": "MIT"
+  }
+]

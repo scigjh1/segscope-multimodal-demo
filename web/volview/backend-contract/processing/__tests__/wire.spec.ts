@@ -1,0 +1,469 @@
+import { describe, expect, it } from 'vitest';
+
+import {
+  JOB_STATES,
+  RESULT_INTENTS,
+  INTENT_VOCABULARY_VERSION,
+  STAGEABLE_TYPES,
+  inputValueSchema,
+  stageInputDescriptorSchema,
+  neutralJobStatusSchema,
+  resultIntentSchema,
+  knownResultIntentSchema,
+  jobHistoryPageSchema,
+  jobHistorySummarySchema,
+  jobHistoryDetailSchema,
+  jobResultsSchema,
+  jobResultsErrorSchema,
+  currentResultIntentName,
+} from '../wire';
+import { loadFixture, loadFixtureDir } from './loadFixtures';
+
+const wire = Object.fromEntries(
+  loadFixtureDir('wire').map((f) => [f.name, f.data])
+);
+
+// ---------------------------------------------------------------------------
+// Input values
+// ---------------------------------------------------------------------------
+
+describe('input value fixtures', () => {
+  it.each([
+    'input-value.dicom-series',
+    'input-value.single-file',
+    'input-value.labelmap',
+  ])('validates %s', (name) => {
+    expect(() => inputValueSchema.parse(wire[name])).not.toThrow();
+  });
+
+  it('carries multiple URIs for a dicom-series image', () => {
+    const value = inputValueSchema.parse(wire['input-value.dicom-series']);
+    expect(value.type).toBe('image');
+    expect(value.uris.length).toBeGreaterThan(1);
+  });
+
+  it('accepts the open `labelmap` type tag (no closed server enum)', () => {
+    const value = inputValueSchema.parse(wire['input-value.labelmap']);
+    expect(value.type).toBe('labelmap');
+  });
+
+  it('accepts an unknown/open type tag', () => {
+    expect(() =>
+      inputValueSchema.parse({ type: 'pet', uris: ['/x'] })
+    ).not.toThrow();
+  });
+
+  it('rejects a bound input with no uris (negative fixture)', () => {
+    const empty = loadFixture('negative/empty-uris.json');
+    expect(inputValueSchema.safeParse(empty).success).toBe(false);
+  });
+});
+
+describe('staged resource descriptor fixtures', () => {
+  it('binds staged labelmap bytes to a durable reference image', () => {
+    const descriptor = stageInputDescriptorSchema.parse(
+      wire['stage-input.labelmap']
+    );
+    expect(descriptor.type).toBe('labelmap');
+    expect(descriptor.referenceImage.type).toBe('image');
+    expect(descriptor.referenceImage.uris).toHaveLength(2);
+  });
+
+  it('binds staged annotations bytes to a durable reference image', () => {
+    const descriptor = stageInputDescriptorSchema.parse(
+      wire['stage-input.annotations']
+    );
+    expect(descriptor.type).toBe('annotations');
+    expect(descriptor.name).toBe('chest-ct.annotations.json');
+    expect(descriptor.referenceImage.type).toBe('image');
+    expect(descriptor.referenceImage.uris).toHaveLength(2);
+  });
+
+  it('pins the stageable types and their identical key set', () => {
+    // A new stageable type adds a union member and nothing else: the descriptor
+    // key set is the same for every type, so the backend runs ONE code path.
+    expect([...STAGEABLE_TYPES]).toEqual(['labelmap', 'annotations']);
+    const keys = (name: string) =>
+      Object.keys(
+        stageInputDescriptorSchema.parse(wire[name]) as Record<string, unknown>
+      ).sort();
+    expect(keys('stage-input.annotations')).toEqual(
+      keys('stage-input.labelmap')
+    );
+  });
+
+  it('rejects an unknown staged resource type (staging is fail-closed)', () => {
+    const unknownType = loadFixture('negative/stage-input-unknown-type.json');
+    expect(stageInputDescriptorSchema.safeParse(unknownType).success).toBe(
+      false
+    );
+  });
+
+  it('rejects an annotations descriptor without reference provenance', () => {
+    expect(
+      stageInputDescriptorSchema.safeParse({
+        type: 'annotations',
+        name: 'rois.annotations.json',
+        referenceImage: { type: 'image', uris: [] },
+      }).success
+    ).toBe(false);
+  });
+
+  it('rejects a labelmap descriptor without reference provenance', () => {
+    expect(
+      stageInputDescriptorSchema.safeParse({
+        type: 'labelmap',
+        name: 'mask.seg.nrrd',
+        referenceImage: { type: 'image', uris: [] },
+      }).success
+    ).toBe(false);
+  });
+
+  it('rejects undeclared reference-image descriptor fields', () => {
+    expect(
+      stageInputDescriptorSchema.safeParse({
+        type: 'labelmap',
+        name: 'mask.seg.nrrd',
+        referenceImage: {
+          type: 'image',
+          uris: ['/x'],
+          backendArtifactId: 'mixed-identity-channel',
+        },
+      }).success
+    ).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Neutral status
+// ---------------------------------------------------------------------------
+
+describe('neutral job status fixtures', () => {
+  it('has exactly the five v1 states, cancelled included', () => {
+    expect([...JOB_STATES]).toEqual([
+      'pending',
+      'running',
+      'success',
+      'error',
+      'cancelled',
+    ]);
+  });
+
+  it.each([
+    'status.pending',
+    'status.running',
+    'status.success',
+    'status.error',
+    'status.cancelled',
+    'status.error-tail',
+  ])('validates %s', (name) => {
+    expect(() => neutralJobStatusSchema.parse(wire[name])).not.toThrow();
+  });
+
+  it('accepts cancelled with no wire change', () => {
+    const s = neutralJobStatusSchema.parse(wire['status.cancelled']);
+    expect(s.state).toBe('cancelled');
+  });
+
+  it('carries an errorTail on an errored job', () => {
+    const s = neutralJobStatusSchema.parse(wire['status.error-tail']);
+    expect(s.state).toBe('error');
+    expect(s.errorTail).toBeTruthy();
+  });
+
+  it('rejects a state outside the five (e.g. the retired `queued`)', () => {
+    // `queued`/`succeeded`/`failed` are rejected; the runtime names
+    // (`pending`/`success`/`error`) are the valid five.
+    expect(
+      neutralJobStatusSchema.safeParse({ jobId: 'j', state: 'queued' }).success
+    ).toBe(false);
+  });
+
+  it.each(['.', '..'])('rejects the dot-segment job id %j', (jobId) => {
+    expect(
+      neutralJobStatusSchema.safeParse({
+        jobId,
+        state: 'running',
+        resultState: 'waiting',
+      }).success
+    ).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Result intents
+// ---------------------------------------------------------------------------
+
+describe('currentResultIntentName', () => {
+  it('reads the earlier segmentation import name as the current one', () => {
+    expect(currentResultIntentName('add-segment-group')).toBe(
+      'import-segmentation'
+    );
+  });
+
+  it.each(['toString', 'constructor', '__proto__', 'add-mesh'])(
+    'passes %s through unchanged',
+    (intent) => {
+      expect(currentResultIntentName(intent)).toBe(intent);
+    }
+  );
+});
+
+describe('result intent fixtures', () => {
+  it('exports vocabulary version 3 and the exactly-four state intents', () => {
+    expect(INTENT_VOCABULARY_VERSION).toBe(3);
+    expect([...RESULT_INTENTS]).toEqual([
+      'add-base-image',
+      'add-layer',
+      'import-segmentation',
+      'add-annotations',
+    ]);
+    expect(wire).not.toHaveProperty('intent.download');
+  });
+
+  it.each([
+    'intent.add-base-image',
+    'intent.add-layer',
+    'intent.import-segmentation.with-segments',
+    'intent.import-segmentation.embedded',
+    'intent.add-annotations',
+    'intent.unknown',
+  ])('validates %s', (name) => {
+    expect(() => resultIntentSchema.parse(wire[name])).not.toThrow();
+  });
+
+  it('parses add-annotations as a KNOWN intent carrying a source tag', () => {
+    const fixture = wire['intent.add-annotations'];
+    expect(knownResultIntentSchema.safeParse(fixture).success).toBe(true);
+    const parsed = resultIntentSchema.parse(fixture) as Record<string, unknown>;
+    expect(parsed.intent).toBe('add-annotations');
+    expect(parsed.source).toEqual({
+      providerId: 'analysis-provider',
+      jobId: 'job-abc123',
+      outputId: 'outputAnnotations',
+    });
+    // Labels ride inside the annotations file, so there is no `segments` peer.
+    expect(parsed).not.toHaveProperty('segments');
+  });
+
+  it('accepts add-annotations without a source (source is optional)', () => {
+    expect(
+      knownResultIntentSchema.safeParse({
+        id: 'r1',
+        intent: 'add-annotations',
+        url: '/rois.annotations.json',
+        name: 'rois.annotations.json',
+      }).success
+    ).toBe(true);
+  });
+
+  it('rejects an add-annotations source missing provider identity', () => {
+    expect(
+      knownResultIntentSchema.safeParse({
+        id: 'r1',
+        intent: 'add-annotations',
+        url: '/rois.annotations.json',
+        name: 'rois.annotations.json',
+        source: { jobId: 'job-abc123', outputId: 'outputAnnotations' },
+      }).success
+    ).toBe(false);
+  });
+
+  it('parses import-segmentation WITH segments and a source provenance tag', () => {
+    const parsed = resultIntentSchema.parse(
+      wire['intent.import-segmentation.with-segments']
+    ) as Record<string, unknown>;
+    expect(parsed.intent).toBe('import-segmentation');
+    expect(Array.isArray(parsed.segments)).toBe(true);
+    expect(parsed.source).toEqual({
+      providerId: 'analysis-provider',
+      jobId: 'job-abc123',
+      outputId: 'outputLabelmap',
+    });
+  });
+
+  it('parses import-segmentation WITHOUT segments (embedded metadata) but with source', () => {
+    const parsed = resultIntentSchema.parse(
+      wire['intent.import-segmentation.embedded']
+    ) as Record<string, unknown>;
+    expect(parsed.intent).toBe('import-segmentation');
+    expect(parsed.segments).toBeUndefined();
+    expect(parsed.source).toMatchObject({ outputId: 'outputLabelmap' });
+  });
+
+  it('rejects a segmentation source without provider identity', () => {
+    const value = structuredClone(
+      wire['intent.import-segmentation.with-segments']
+    ) as { source: { providerId?: string } };
+    delete value.source.providerId;
+    expect(knownResultIntentSchema.safeParse(value).success).toBe(false);
+  });
+
+  it('accepts an unknown intent as an ordinary result with no state action', () => {
+    const parsed = resultIntentSchema.parse(wire['intent.unknown']) as Record<
+      string,
+      unknown
+    >;
+    // It parses (fail-open), but is not one of the known state actions.
+    expect(
+      knownResultIntentSchema.safeParse(wire['intent.unknown']).success
+    ).toBe(false);
+    expect(parsed.url).toBeTruthy();
+    expect(parsed.name).toBeTruthy();
+  });
+
+  it('keeps the unknown-intent fixture unknown after the vocabulary grew', () => {
+    // `add-polygon` is deliberately NOT a member of the vocabulary: it is the
+    // pinned fail-open example, and growing the vocabulary must not quietly
+    // adopt it. Adding an intent is exactly the kind of change that could.
+    const fixture = wire['intent.unknown'] as { intent: string };
+    expect(fixture.intent).toBe('add-polygon');
+    expect(RESULT_INTENTS).not.toContain(fixture.intent);
+    expect(knownResultIntentSchema.safeParse(fixture).success).toBe(false);
+    expect(resultIntentSchema.safeParse(fixture).success).toBe(true);
+  });
+
+  it.each([
+    ['missing', { id: 'r1', url: '/report.csv', name: 'report.csv' }],
+    [
+      'malformed',
+      { id: 'r1', intent: 17, url: '/report.csv', name: 'report.csv' },
+    ],
+  ])('accepts a %s intent as an ordinary result record', (_name, value) => {
+    expect(() => resultIntentSchema.parse(value)).not.toThrow();
+  });
+
+  it('preserves null mimeType/size and extra producer fields on an ordinary result', () => {
+    const parsed = resultIntentSchema.parse({
+      id: 'r1',
+      intent: 17,
+      url: '/report.csv',
+      name: 'report.csv',
+      mimeType: null,
+      size: null,
+      producerHint: 'keep-me',
+    }) as Record<string, unknown>;
+    expect(parsed.mimeType).toBeNull();
+    expect(parsed.size).toBeNull();
+    // A catchall-preserved extra field survives without gaining behavior.
+    expect(parsed.producerHint).toBe('keep-me');
+  });
+
+  it.each([
+    ['a missing id', { url: '/x', name: 'x' }],
+    ['an empty id', { id: '', url: '/x', name: 'x' }],
+    [
+      'a missing id on a known intent',
+      {
+        intent: 'add-base-image',
+        url: '/x',
+        name: 'x',
+      },
+    ],
+    [
+      'an empty id on a known intent',
+      {
+        id: '',
+        intent: 'add-base-image',
+        url: '/x',
+        name: 'x',
+      },
+    ],
+  ])('rejects a result row with %s', (_name, value) => {
+    expect(resultIntentSchema.safeParse(value).success).toBe(false);
+  });
+
+  it('still rejects a result that is not even a file reference', () => {
+    expect(
+      resultIntentSchema.safeParse({ id: 'r1', intent: 'add-polygon' }).success
+    ).toBe(false);
+  });
+
+  it('rejects a wrong-length segment color (the tuple-length parity pin)', () => {
+    // Only the strict known-intent union rejects the 3-element color; the
+    // published result-intent schema accepts the row and demotes it to an
+    // ordinary result with no state action.
+    const short = loadFixture('negative/wrong-length-color.json');
+    expect(knownResultIntentSchema.safeParse(short).success).toBe(false);
+    expect(resultIntentSchema.safeParse(short).success).toBe(true);
+
+    const good = wire['intent.import-segmentation.with-segments'] as {
+      segments: { color: number[] }[];
+    };
+    const long = structuredClone(good);
+    long.segments[0].color = [255, 0, 0, 255, 255];
+    expect(knownResultIntentSchema.safeParse(long).success).toBe(false);
+    expect(knownResultIntentSchema.safeParse(good).success).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Durable job-history handle + result-read payloads
+// ---------------------------------------------------------------------------
+
+describe('durable job-history handle + result-read payloads', () => {
+  it('validates job-history summary, page, and detail fixtures', () => {
+    expect(
+      jobHistorySummarySchema.parse(wire['job-history-summary']).state
+    ).toBe('success');
+    expect(
+      jobHistoryPageSchema.parse(wire['job-history-page']).nextCursor
+    ).toBe('opaque-continuation');
+    expect(
+      jobHistoryDetailSchema.parse(wire['job-history-detail']).log
+    ).toEqual(['completed\n']);
+  });
+
+  it('rejects an impossible job-history lifecycle pairing', () => {
+    // Parse the fixture first so the spread has a typed object source (the raw
+    // fixture is `unknown`, which cannot be spread — TS2698).
+    const summary = jobHistorySummarySchema.parse(wire['job-history-summary']);
+    const parsed = jobHistorySummarySchema.safeParse({
+      ...summary,
+      state: 'success',
+      resultState: 'waiting',
+    });
+    expect(parsed.success).toBe(false);
+  });
+
+  it('validates the pinned lightweight job-history page', () => {
+    const page = jobHistoryPageSchema.parse({
+      jobs: [
+        {
+          jobId: 'job-1',
+          taskId: 'task-1',
+          taskTitle: 'Threshold',
+          createdBy: { id: 'user-1', name: 'Ada Lovelace' },
+          createdAt: '2026-06-01T12:00:00Z',
+          startedAt: '2026-06-01T12:00:01Z',
+          finishedAt: '2026-06-01T12:00:05Z',
+          state: 'success',
+          resultState: 'incomplete',
+          progress: 1,
+          outputSummary: {
+            recorded: 2,
+            missing: 1,
+          },
+        },
+      ],
+      nextCursor: 'opaque-value',
+    });
+    expect(page.jobs[0].taskTitle).toBe('Threshold');
+    expect(page.nextCursor).toBe('opaque-value');
+    expect(page.jobs[0]).not.toHaveProperty('inputUris');
+    expect(page.jobs[0]).not.toHaveProperty('log');
+    expect(page.jobs[0]).not.toHaveProperty('params');
+  });
+  it('validates a getJobResults success payload with a missing count', () => {
+    const results = jobResultsSchema.parse(wire['job-results.missing']);
+    expect(results.missing).toBe(2);
+    expect(results.intents.length).toBe(1);
+  });
+
+  it('validates a getJobResults error payload (non-success)', () => {
+    const err = jobResultsErrorSchema.parse(wire['job-results.error']);
+    expect(err.message).toBeTruthy();
+    expect(err.code).toBe('results_unavailable');
+    expect(err.state).toBe('error');
+  });
+});

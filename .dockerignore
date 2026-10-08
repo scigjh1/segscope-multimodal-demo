@@ -1,0 +1,15 @@
+.git
+.venv*
+data
+private
+datasets
+weights
+checkpoints
+outputs
+logs
+**/__pycache__
+*.nii*
+*.dcm
+*.pt
+*.pth
+.env*

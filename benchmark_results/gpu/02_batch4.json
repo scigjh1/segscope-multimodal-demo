@@ -1,0 +1,1303 @@
+{
+  "schema_version": 1,
+  "created_utc": "2026-10-08T04:28:28.421986+00:00",
+  "model": {
+    "id": "AnatoFluxNet-Light-Direct",
+    "version": "frozen-fold1-u7000",
+    "fingerprint": "1cd29369c33a72dfc09b20d173ae3540b1c1214d676ef869e030f603ceee083a",
+    "description": "Operator-owned 12.16M parameter 3D segmentation model; research weights remain private"
+  },
+  "hardware": {
+    "torch": "2.1.0+cu121",
+    "cuda": "12.1",
+    "cuda_available": true,
+    "devices": [
+      {
+        "id": "cpu",
+        "name": "CPU",
+        "precision": [
+          "fp32"
+        ]
+      },
+      {
+        "id": "cuda:0",
+        "name": "NVIDIA A800 80GB PCIe",
+        "total_mib": 81051,
+        "free_mib": 69491,
+        "precision": [
+          "fp32",
+          "fp16"
+        ]
+      },
+      {
+        "id": "cuda:1",
+        "name": "NVIDIA A800 80GB PCIe",
+        "total_mib": 81051,
+        "free_mib": 69779,
+        "precision": [
+          "fp32",
+          "fp16"
+        ]
+      }
+    ]
+  },
+  "monai": "1.3.2",
+  "python": "3.9.5",
+  "cpu": "x86_64",
+  "cpu_threads": 8,
+  "workload": {
+    "kind": "fixed synthetic 3D CT-like tensor; performance only",
+    "seed": 42,
+    "shape_bdhw": [
+      4,
+      32,
+      96,
+      96
+    ],
+    "spacing_zyx_mm": [
+      2.5,
+      1.2,
+      1.2
+    ],
+    "input_sha256": "16aedeacf685e962540c53f061f43a1477e8b48c1226dbaba890a89caad405e5",
+    "roi_size": [
+      32,
+      96,
+      96
+    ],
+    "window_batch_size": 1,
+    "overlap": 0.25
+  },
+  "protocol": {
+    "warmup": 5,
+    "measured": 30,
+    "cold_model_load_excluded": true,
+    "disk_network_excluded": true,
+    "tf32": false,
+    "cudnn_benchmark": false,
+    "latency": "synchronized end-to-end runtime wall time; each sample is one complete batch",
+    "vram": "PyTorch allocated/reserved process high-water mark; not total nvidia-smi memory",
+    "sampling": "same seeded input repeated; quantiles use numpy linear interpolation"
+  },
+  "results": [
+    {
+      "device": "cuda:1",
+      "precision": "fp32",
+      "summary": {
+        "p50_ms": 85.57962998747826,
+        "p95_ms": 139.37512962147593,
+        "mean_ms": 95.67135938753684,
+        "throughput_volumes_s": 41.80979580103136,
+        "peak_allocated_mib": 180.43017578125,
+        "peak_reserved_mib": 200.0,
+        "stages_mean_ms": {
+          "preprocess_ms": 2.069083725412687,
+          "h2d_ms": 0.6904639303684235,
+          "inference_ms": 82.65403881669044,
+          "postprocess_d2h_ms": 10.257772915065289,
+          "total_ms": 95.67135938753684
+        }
+      },
+      "raw_samples": [
+        {
+          "timings": {
+            "preprocess_ms": 2.035807818174362,
+            "h2d_ms": 0.47285109758377075,
+            "inference_ms": 69.95950825512409,
+            "postprocess_d2h_ms": 7.058864459395409,
+            "total_ms": 79.52703163027763
+          },
+          "memory": {
+            "peak_allocated_mib": 180.43017578125,
+            "peak_reserved_mib": 200.0
+          },
+          "input_shape": [
+            4,
+            32,
+            96,
+            96
+          ]
+        },
+        {
+          "timings": {
+            "preprocess_ms": 2.0657535642385483,
+            "h2d_ms": 0.5004778504371643,
+            "inference_ms": 69.68268007040024,
+            "postprocess_d2h_ms": 12.806331738829613,
+            "total_ms": 85.05524322390556
+          },
+          "memory": {
+            "peak_allocated_mib": 180.43017578125,
+            "peak_reserved_mib": 200.0
+          },
+          "input_shape": [
+            4,
+            32,
+            96,
+            96
+          ]
+        },
+        {
+          "timings": {
+            "preprocess_ms": 2.040525898337364,
+            "h2d_ms": 0.5340911448001862,
+            "inference_ms": 142.98215880990028,
+            "postprocess_d2h_ms": 8.875563740730286,
+            "total_ms": 154.43233959376812
+          },
+          "memory": {
+            "peak_allocated_mib": 180.43017578125,
+            "peak_reserved_mib": 200.0
+          },
+          "input_shape": [
+            4,
+            32,
+            96,
+            96
+          ]
+        },
+        {
+          "timings": {
+            "preprocess_ms": 1.9389353692531586,
+            "h2d_ms": 1.584688201546669,
+            "inference_ms": 91.92962758243084,
+            "postprocess_d2h_ms": 13.16291093826294,
+            "total_ms": 108.6161620914936
+          },
+          "memory": {
+            "peak_allocated_mib": 180.43017578125,
+            "peak_reserved_mib": 200.0
+          },
+          "input_shape": [
+            4,
+            32,
+            96,
+            96
+          ]
+        },
+        {
+          "timings": {
+            "preprocess_ms": 2.1137725561857224,
+            "h2d_ms": 0.5029607564210892,
+            "inference_ms": 74.47474822402,
+            "postprocess_d2h_ms": 8.687831461429596,
+            "total_ms": 85.77931299805641
+          },
+          "memory": {
+            "peak_allocated_mib": 180.43017578125,
+            "peak_reserved_mib": 200.0
+          },
+          "input_shape": [
+            4,
+            32,
+            96,
+            96
+          ]
+        },
+        {
+          "timings": {
+            "preprocess_ms": 2.161763608455658,
+            "h2d_ms": 0.5141962319612503,
+            "inference_ms": 72.42084480822086,
+            "postprocess_d2h_ms": 6.782086566090584,
+            "total_ms": 81.87889121472836
+          },
+          "memory": {
+            "peak_allocated_mib": 180.43017578125,
+            "peak_reserved_mib": 200.0
+          },
+          "input_shape": [
+            4,
+            32,
+            96,
+            96
+          ]
+        },
+        {
+          "timings": {
+            "preprocess_ms": 2.0504165440797806,
+            "h2d_ms": 0.4888530820608139,
+            "inference_ms": 69.60489600896835,
+            "postprocess_d2h_ms": 14.35163989663124,
+            "total_ms": 86.49580553174019
+          },
+          "memory": {
+            "peak_allocated_mib": 180.43017578125,
+            "peak_reserved_mib": 200.0
+          },
+          "input_shape": [
+            4,
+            32,
+            96,
+            96
+          ]
+        },
+        {
+          "timings": {
+            "preprocess_ms": 1.9895117729902267,
+            "h2d_ms": 0.48180297017097473,
+            "inference_ms": 69.76761110126972,
+            "postprocess_d2h_ms": 6.704004481434822,
+            "total_ms": 78.94293032586575
+          },
+          "memory": {
+            "peak_allocated_mib": 180.43017578125,
+            "peak_reserved_mib": 200.0
+          },
+          "input_shape": [
+            4,
+            32,
+            96,
+            96
+          ]
+        },
+        {
+          "timings": {
+            "preprocess_ms": 2.1036192774772644,
+            "h2d_ms": 0.5013253539800644,
+            "inference_ms": 69.63429413735867,
+            "postprocess_d2h_ms": 15.927145257592201,
+            "total_ms": 88.1663840264082
+          },
+          "memory": {
+            "peak_allocated_mib": 180.43017578125,
+            "peak_reserved_mib": 200.0
+          },
+          "input_shape": [
+            4,
+            32,
+            96,
+            96
+          ]
+        },
+        {
+          "timings": {
+            "preprocess_ms": 2.1183285862207413,
+            "h2d_ms": 0.491362065076828,
+            "inference_ms": 69.65196132659912,
+            "postprocess_d2h_ms": 7.421094924211502,
+            "total_ms": 79.68274690210819
+          },
+          "memory": {
+            "peak_allocated_mib": 180.43017578125,
+            "peak_reserved_mib": 200.0
+          },
+          "input_shape": [
+            4,
+            32,
+            96,
+            96
+          ]
+        },
+        {
+          "timings": {
+            "preprocess_ms": 2.0305439829826355,
+            "h2d_ms": 0.5384795367717743,
+            "inference_ms": 102.19388827681541,
+            "postprocess_d2h_ms": 16.123848035931587,
+            "total_ms": 120.88675983250141
+          },
+          "memory": {
+            "peak_allocated_mib": 180.43017578125,
+            "peak_reserved_mib": 200.0
+          },
+          "input_shape": [
+            4,
+            32,
+            96,
+            96
+          ]
+        },
+        {
+          "timings": {
+            "preprocess_ms": 2.0448975265026093,
+            "h2d_ms": 2.450341358780861,
+            "inference_ms": 126.02419592440128,
+            "postprocess_d2h_ms": 8.984699845314026,
+            "total_ms": 139.50413465499878
+          },
+          "memory": {
+            "peak_allocated_mib": 180.43017578125,
+            "peak_reserved_mib": 200.0
+          },
+          "input_shape": [
+            4,
+            32,
+            96,
+            96
+          ]
+        },
+        {
+          "timings": {
+            "preprocess_ms": 2.111367881298065,
+            "h2d_ms": 0.508330762386322,
+            "inference_ms": 71.48902863264084,
+            "postprocess_d2h_ms": 7.69469141960144,
+            "total_ms": 81.80341869592667
+          },
+          "memory": {
+            "peak_allocated_mib": 180.43017578125,
+            "peak_reserved_mib": 200.0
+          },
+          "input_shape": [
+            4,
+            32,
+            96,
+            96
+          ]
+        },
+        {
+          "timings": {
+            "preprocess_ms": 2.0614583045244217,
+            "h2d_ms": 0.6421878933906555,
+            "inference_ms": 70.64609602093697,
+            "postprocess_d2h_ms": 12.030204758048058,
+            "total_ms": 85.3799469769001
+          },
+          "memory": {
+            "peak_allocated_mib": 180.43017578125,
+            "peak_reserved_mib": 200.0
+          },
+          "input_shape": [
+            4,
+            32,
+            96,
+            96
+          ]
+        },
+        {
+          "timings": {
+            "preprocess_ms": 2.1072030067443848,
+            "h2d_ms": 2.155652269721031,
+            "inference_ms": 69.59922052919865,
+            "postprocess_d2h_ms": 8.556950837373734,
+            "total_ms": 82.4190266430378
+          },
+          "memory": {
+            "peak_allocated_mib": 180.43017578125,
+            "peak_reserved_mib": 200.0
+          },
+          "input_shape": [
+            4,
+            32,
+            96,
+            96
+          ]
+        },
+        {
+          "timings": {
+            "preprocess_ms": 2.0853597670793533,
+            "h2d_ms": 0.49081631004810333,
+            "inference_ms": 69.57073323428631,
+            "postprocess_d2h_ms": 6.624404340982437,
+            "total_ms": 78.7713136523962
+          },
+          "memory": {
+            "peak_allocated_mib": 180.43017578125,
+            "peak_reserved_mib": 200.0
+          },
+          "input_shape": [
+            4,
+            32,
+            96,
+            96
+          ]
+        },
+        {
+          "timings": {
+            "preprocess_ms": 2.072937786579132,
+            "h2d_ms": 0.494152307510376,
+            "inference_ms": 69.58521343767643,
+            "postprocess_d2h_ms": 15.349769964814186,
+            "total_ms": 87.50207349658012
+          },
+          "memory": {
+            "peak_allocated_mib": 180.43017578125,
+            "peak_reserved_mib": 200.0
+          },
+          "input_shape": [
+            4,
+            32,
+            96,
+            96
+          ]
+        },
+        {
+          "timings": {
+            "preprocess_ms": 2.092963084578514,
+            "h2d_ms": 0.49646012485027313,
+            "inference_ms": 69.65616717934608,
+            "postprocess_d2h_ms": 6.488097831606865,
+            "total_ms": 78.73368822038174
+          },
+          "memory": {
+            "peak_allocated_mib": 180.43017578125,
+            "peak_reserved_mib": 200.0
+          },
+          "input_shape": [
+            4,
+            32,
+            96,
+            96
+          ]
+        },
+        {
+          "timings": {
+            "preprocess_ms": 2.044927328824997,
+            "h2d_ms": 0.479232519865036,
+            "inference_ms": 69.63075138628483,
+            "postprocess_d2h_ms": 14.667578041553497,
+            "total_ms": 86.82248927652836
+          },
+          "memory": {
+            "peak_allocated_mib": 180.43017578125,
+            "peak_reserved_mib": 200.0
+          },
+          "input_shape": [
+            4,
+            32,
+            96,
+            96
+          ]
+        },
+        {
+          "timings": {
+            "preprocess_ms": 2.040976658463478,
+            "h2d_ms": 0.517033040523529,
+            "inference_ms": 127.65667587518692,
+            "postprocess_d2h_ms": 9.002771228551865,
+            "total_ms": 139.2174568027258
+          },
+          "memory": {
+            "peak_allocated_mib": 180.43017578125,
+            "peak_reserved_mib": 200.0
+          },
+          "input_shape": [
+            4,
+            32,
+            96,
+            96
+          ]
+        },
+        {
+          "timings": {
+            "preprocess_ms": 2.02864408493042,
+            "h2d_ms": 0.7766112685203552,
+            "inference_ms": 108.35270583629608,
+            "postprocess_d2h_ms": 12.891130521893501,
+            "total_ms": 124.04909171164036
+          },
+          "memory": {
+            "peak_allocated_mib": 180.43017578125,
+            "peak_reserved_mib": 200.0
+          },
+          "input_shape": [
+            4,
+            32,
+            96,
+            96
+          ]
+        },
+        {
+          "timings": {
+            "preprocess_ms": 2.1012425422668457,
+            "h2d_ms": 0.49186497926712036,
+            "inference_ms": 74.43838566541672,
+            "postprocess_d2h_ms": 9.110407903790474,
+            "total_ms": 86.14190109074116
+          },
+          "memory": {
+            "peak_allocated_mib": 180.43017578125,
+            "peak_reserved_mib": 200.0
+          },
+          "input_shape": [
+            4,
+            32,
+            96,
+            96
+          ]
+        },
+        {
+          "timings": {
+            "preprocess_ms": 2.1508336067199707,
+            "h2d_ms": 0.5216430872678757,
+            "inference_ms": 70.81765681505203,
+            "postprocess_d2h_ms": 6.9979410618543625,
+            "total_ms": 80.48807457089424
+          },
+          "memory": {
+            "peak_allocated_mib": 180.43017578125,
+            "peak_reserved_mib": 200.0
+          },
+          "input_shape": [
+            4,
+            32,
+            96,
+            96
+          ]
+        },
+        {
+          "timings": {
+            "preprocess_ms": 2.2423509508371353,
+            "h2d_ms": 0.5381274968385696,
+            "inference_ms": 71.57102040946484,
+            "postprocess_d2h_ms": 13.143006712198257,
+            "total_ms": 87.4945055693388
+          },
+          "memory": {
+            "peak_allocated_mib": 180.43017578125,
+            "peak_reserved_mib": 200.0
+          },
+          "input_shape": [
+            4,
+            32,
+            96,
+            96
+          ]
+        },
+        {
+          "timings": {
+            "preprocess_ms": 1.9571911543607712,
+            "h2d_ms": 0.4895143210887909,
+            "inference_ms": 69.54416818916798,
+            "postprocess_d2h_ms": 6.4191799610853195,
+            "total_ms": 78.41005362570286
+          },
+          "memory": {
+            "peak_allocated_mib": 180.43017578125,
+            "peak_reserved_mib": 200.0
+          },
+          "input_shape": [
+            4,
+            32,
+            96,
+            96
+          ]
+        },
+        {
+          "timings": {
+            "preprocess_ms": 2.0325370132923126,
+            "h2d_ms": 0.4809591919183731,
+            "inference_ms": 69.53706033527851,
+            "postprocess_d2h_ms": 12.74988241493702,
+            "total_ms": 84.80043895542622
+          },
+          "memory": {
+            "peak_allocated_mib": 180.43017578125,
+            "peak_reserved_mib": 200.0
+          },
+          "input_shape": [
+            4,
+            32,
+            96,
+            96
+          ]
+        },
+        {
+          "timings": {
+            "preprocess_ms": 1.960141584277153,
+            "h2d_ms": 0.48331543803215027,
+            "inference_ms": 69.60400007665157,
+            "postprocess_d2h_ms": 8.756447583436966,
+            "total_ms": 80.80390468239784
+          },
+          "memory": {
+            "peak_allocated_mib": 180.43017578125,
+            "peak_reserved_mib": 200.0
+          },
+          "input_shape": [
+            4,
+            32,
+            96,
+            96
+          ]
+        },
+        {
+          "timings": {
+            "preprocess_ms": 2.1264348179101944,
+            "h2d_ms": 0.4878118634223938,
+            "inference_ms": 69.61926817893982,
+            "postprocess_d2h_ms": 6.722591817378998,
+            "total_ms": 78.9561066776514
+          },
+          "memory": {
+            "peak_allocated_mib": 180.43017578125,
+            "peak_reserved_mib": 200.0
+          },
+          "input_shape": [
+            4,
+            32,
+            96,
+            96
+          ]
+        },
+        {
+          "timings": {
+            "preprocess_ms": 2.117972820997238,
+            "h2d_ms": 0.5279313772916794,
+            "inference_ms": 103.02395559847355,
+            "postprocess_d2h_ms": 15.384946018457413,
+            "total_ms": 121.05480581521988
+          },
+          "memory": {
+            "peak_allocated_mib": 180.43017578125,
+            "peak_reserved_mib": 200.0
+          },
+          "input_shape": [
+            4,
+            32,
+            96,
+            96
+          ]
+        },
+        {
+          "timings": {
+            "preprocess_ms": 2.0440928637981415,
+            "h2d_ms": 1.0708440095186234,
+            "inference_ms": 126.95264257490635,
+            "postprocess_d2h_ms": 8.257163688540459,
+            "total_ms": 138.32474313676357
+          },
+          "memory": {
+            "peak_allocated_mib": 180.43017578125,
+            "peak_reserved_mib": 200.0
+          },
+          "input_shape": [
+            4,
+            32,
+            96,
+            96
+          ]
+        }
+      ]
+    },
+    {
+      "device": "cuda:1",
+      "precision": "fp16",
+      "summary": {
+        "p50_ms": 35.97486484795809,
+        "p95_ms": 70.23445013910532,
+        "mean_ms": 41.1780321970582,
+        "throughput_volumes_s": 97.13917316053204,
+        "peak_allocated_mib": 308.56005859375,
+        "peak_reserved_mib": 342.0,
+        "stages_mean_ms": {
+          "preprocess_ms": 2.1477632224559784,
+          "h2d_ms": 0.7624451071023941,
+          "inference_ms": 27.445466816425323,
+          "postprocess_d2h_ms": 10.822357051074505,
+          "total_ms": 41.1780321970582
+        }
+      },
+      "raw_samples": [
+        {
+          "timings": {
+            "preprocess_ms": 2.1369867026805878,
+            "h2d_ms": 0.5259569734334946,
+            "inference_ms": 21.862998604774475,
+            "postprocess_d2h_ms": 6.945343688130379,
+            "total_ms": 31.471285969018936
+          },
+          "memory": {
+            "peak_allocated_mib": 308.56005859375,
+            "peak_reserved_mib": 342.0
+          },
+          "input_shape": [
+            4,
+            32,
+            96,
+            96
+          ]
+        },
+        {
+          "timings": {
+            "preprocess_ms": 2.212764695286751,
+            "h2d_ms": 0.5228333175182343,
+            "inference_ms": 21.95080742239952,
+            "postprocess_d2h_ms": 12.973923236131668,
+            "total_ms": 37.660328671336174
+          },
+          "memory": {
+            "peak_allocated_mib": 308.56005859375,
+            "peak_reserved_mib": 342.0
+          },
+          "input_shape": [
+            4,
+            32,
+            96,
+            96
+          ]
+        },
+        {
+          "timings": {
+            "preprocess_ms": 2.1046232432127,
+            "h2d_ms": 0.5439091473817825,
+            "inference_ms": 22.748835384845734,
+            "postprocess_d2h_ms": 7.1045756340026855,
+            "total_ms": 32.5019434094429
+          },
+          "memory": {
+            "peak_allocated_mib": 308.56005859375,
+            "peak_reserved_mib": 342.0
+          },
+          "input_shape": [
+            4,
+            32,
+            96,
+            96
+          ]
+        },
+        {
+          "timings": {
+            "preprocess_ms": 2.1138079464435577,
+            "h2d_ms": 0.6538722664117813,
+            "inference_ms": 51.56810022890568,
+            "postprocess_d2h_ms": 15.474436804652214,
+            "total_ms": 69.81021724641323
+          },
+          "memory": {
+            "peak_allocated_mib": 308.56005859375,
+            "peak_reserved_mib": 342.0
+          },
+          "input_shape": [
+            4,
+            32,
+            96,
+            96
+          ]
+        },
+        {
+          "timings": {
+            "preprocess_ms": 2.072962000966072,
+            "h2d_ms": 0.9030979126691818,
+            "inference_ms": 50.66254176199436,
+            "postprocess_d2h_ms": 9.834840893745422,
+            "total_ms": 63.47344256937504
+          },
+          "memory": {
+            "peak_allocated_mib": 308.56005859375,
+            "peak_reserved_mib": 342.0
+          },
+          "input_shape": [
+            4,
+            32,
+            96,
+            96
+          ]
+        },
+        {
+          "timings": {
+            "preprocess_ms": 2.0999275147914886,
+            "h2d_ms": 2.6154164224863052,
+            "inference_ms": 23.686859756708145,
+            "postprocess_d2h_ms": 12.629741802811623,
+            "total_ms": 41.03194549679756
+          },
+          "memory": {
+            "peak_allocated_mib": 308.56005859375,
+            "peak_reserved_mib": 342.0
+          },
+          "input_shape": [
+            4,
+            32,
+            96,
+            96
+          ]
+        },
+        {
+          "timings": {
+            "preprocess_ms": 2.0974837243556976,
+            "h2d_ms": 0.4983246326446533,
+            "inference_ms": 21.851567551493645,
+            "postprocess_d2h_ms": 8.298492059111595,
+            "total_ms": 32.74586796760559
+          },
+          "memory": {
+            "peak_allocated_mib": 308.56005859375,
+            "peak_reserved_mib": 342.0
+          },
+          "input_shape": [
+            4,
+            32,
+            96,
+            96
+          ]
+        },
+        {
+          "timings": {
+            "preprocess_ms": 2.122962847352028,
+            "h2d_ms": 0.49357302486896515,
+            "inference_ms": 21.829159930348396,
+            "postprocess_d2h_ms": 6.945643573999405,
+            "total_ms": 31.391339376568794
+          },
+          "memory": {
+            "peak_allocated_mib": 308.56005859375,
+            "peak_reserved_mib": 342.0
+          },
+          "input_shape": [
+            4,
+            32,
+            96,
+            96
+          ]
+        },
+        {
+          "timings": {
+            "preprocess_ms": 2.069225534796715,
+            "h2d_ms": 0.5254410207271576,
+            "inference_ms": 24.855978786945343,
+            "postprocess_d2h_ms": 12.465976178646088,
+            "total_ms": 39.9166215211153
+          },
+          "memory": {
+            "peak_allocated_mib": 308.56005859375,
+            "peak_reserved_mib": 342.0
+          },
+          "input_shape": [
+            4,
+            32,
+            96,
+            96
+          ]
+        },
+        {
+          "timings": {
+            "preprocess_ms": 2.164360135793686,
+            "h2d_ms": 0.6652362644672394,
+            "inference_ms": 21.875206381082535,
+            "postprocess_d2h_ms": 15.891658142209053,
+            "total_ms": 40.59646092355251
+          },
+          "memory": {
+            "peak_allocated_mib": 308.56005859375,
+            "peak_reserved_mib": 342.0
+          },
+          "input_shape": [
+            4,
+            32,
+            96,
+            96
+          ]
+        },
+        {
+          "timings": {
+            "preprocess_ms": 2.3303981870412827,
+            "h2d_ms": 0.6541982293128967,
+            "inference_ms": 23.66511896252632,
+            "postprocess_d2h_ms": 8.65364819765091,
+            "total_ms": 35.30336357653141
+          },
+          "memory": {
+            "peak_allocated_mib": 308.56005859375,
+            "peak_reserved_mib": 342.0
+          },
+          "input_shape": [
+            4,
+            32,
+            96,
+            96
+          ]
+        },
+        {
+          "timings": {
+            "preprocess_ms": 2.1362975239753723,
+            "h2d_ms": 0.5150418728590012,
+            "inference_ms": 22.060826420783997,
+            "postprocess_d2h_ms": 6.3821543008089066,
+            "total_ms": 31.094320118427277
+          },
+          "memory": {
+            "peak_allocated_mib": 308.56005859375,
+            "peak_reserved_mib": 342.0
+          },
+          "input_shape": [
+            4,
+            32,
+            96,
+            96
+          ]
+        },
+        {
+          "timings": {
+            "preprocess_ms": 1.9905716180801392,
+            "h2d_ms": 0.4886947572231293,
+            "inference_ms": 21.75343781709671,
+            "postprocess_d2h_ms": 10.794095695018768,
+            "total_ms": 35.02679988741875
+          },
+          "memory": {
+            "peak_allocated_mib": 308.56005859375,
+            "peak_reserved_mib": 342.0
+          },
+          "input_shape": [
+            4,
+            32,
+            96,
+            96
+          ]
+        },
+        {
+          "timings": {
+            "preprocess_ms": 1.960907131433487,
+            "h2d_ms": 0.48262253403663635,
+            "inference_ms": 21.766234189271927,
+            "postprocess_d2h_ms": 14.234347268939018,
+            "total_ms": 38.44411112368107
+          },
+          "memory": {
+            "peak_allocated_mib": 308.56005859375,
+            "peak_reserved_mib": 342.0
+          },
+          "input_shape": [
+            4,
+            32,
+            96,
+            96
+          ]
+        },
+        {
+          "timings": {
+            "preprocess_ms": 2.169635146856308,
+            "h2d_ms": 0.49242377281188965,
+            "inference_ms": 21.851563826203346,
+            "postprocess_d2h_ms": 9.336411952972412,
+            "total_ms": 33.850034698843956
+          },
+          "memory": {
+            "peak_allocated_mib": 308.56005859375,
+            "peak_reserved_mib": 342.0
+          },
+          "input_shape": [
+            4,
+            32,
+            96,
+            96
+          ]
+        },
+        {
+          "timings": {
+            "preprocess_ms": 2.192532643675804,
+            "h2d_ms": 0.5155522376298904,
+            "inference_ms": 21.891292184591293,
+            "postprocess_d2h_ms": 6.914341822266579,
+            "total_ms": 31.513718888163567
+          },
+          "memory": {
+            "peak_allocated_mib": 308.56005859375,
+            "peak_reserved_mib": 342.0
+          },
+          "input_shape": [
+            4,
+            32,
+            96,
+            96
+          ]
+        },
+        {
+          "timings": {
+            "preprocess_ms": 2.1621249616146088,
+            "h2d_ms": 0.5395207554101944,
+            "inference_ms": 21.860428154468536,
+            "postprocess_d2h_ms": 11.835407465696335,
+            "total_ms": 36.397481337189674
+          },
+          "memory": {
+            "peak_allocated_mib": 308.56005859375,
+            "peak_reserved_mib": 342.0
+          },
+          "input_shape": [
+            4,
+            32,
+            96,
+            96
+          ]
+        },
+        {
+          "timings": {
+            "preprocess_ms": 2.1721404045820236,
+            "h2d_ms": 0.529903918504715,
+            "inference_ms": 21.895404905080795,
+            "postprocess_d2h_ms": 14.79756087064743,
+            "total_ms": 39.395010098814964
+          },
+          "memory": {
+            "peak_allocated_mib": 308.56005859375,
+            "peak_reserved_mib": 342.0
+          },
+          "input_shape": [
+            4,
+            32,
+            96,
+            96
+          ]
+        },
+        {
+          "timings": {
+            "preprocess_ms": 2.281252294778824,
+            "h2d_ms": 0.4949420690536499,
+            "inference_ms": 21.935928612947464,
+            "postprocess_d2h_ms": 8.123455569148064,
+            "total_ms": 32.835578545928
+          },
+          "memory": {
+            "peak_allocated_mib": 308.56005859375,
+            "peak_reserved_mib": 342.0
+          },
+          "input_shape": [
+            4,
+            32,
+            96,
+            96
+          ]
+        },
+        {
+          "timings": {
+            "preprocess_ms": 2.1083857864141464,
+            "h2d_ms": 0.48883818089962006,
+            "inference_ms": 21.766023710370064,
+            "postprocess_d2h_ms": 6.700316444039345,
+            "total_ms": 31.063564121723175
+          },
+          "memory": {
+            "peak_allocated_mib": 308.56005859375,
+            "peak_reserved_mib": 342.0
+          },
+          "input_shape": [
+            4,
+            32,
+            96,
+            96
+          ]
+        },
+        {
+          "timings": {
+            "preprocess_ms": 2.0063798874616623,
+            "h2d_ms": 0.48525072634220123,
+            "inference_ms": 21.831857040524483,
+            "postprocess_d2h_ms": 11.228760704398155,
+            "total_ms": 35.5522483587265
+          },
+          "memory": {
+            "peak_allocated_mib": 308.56005859375,
+            "peak_reserved_mib": 342.0
+          },
+          "input_shape": [
+            4,
+            32,
+            96,
+            96
+          ]
+        },
+        {
+          "timings": {
+            "preprocess_ms": 2.0037367939949036,
+            "h2d_ms": 0.4949606955051422,
+            "inference_ms": 21.847020834684372,
+            "postprocess_d2h_ms": 14.904281124472618,
+            "total_ms": 39.249999448657036
+          },
+          "memory": {
+            "peak_allocated_mib": 308.56005859375,
+            "peak_reserved_mib": 342.0
+          },
+          "input_shape": [
+            4,
+            32,
+            96,
+            96
+          ]
+        },
+        {
+          "timings": {
+            "preprocess_ms": 2.27927602827549,
+            "h2d_ms": 0.5582943558692932,
+            "inference_ms": 35.85786558687687,
+            "postprocess_d2h_ms": 10.914310812950134,
+            "total_ms": 49.60974678397179
+          },
+          "memory": {
+            "peak_allocated_mib": 308.56005859375,
+            "peak_reserved_mib": 342.0
+          },
+          "input_shape": [
+            4,
+            32,
+            96,
+            96
+          ]
+        },
+        {
+          "timings": {
+            "preprocess_ms": 2.1129418164491653,
+            "h2d_ms": 1.3446714729070663,
+            "inference_ms": 51.077673211693764,
+            "postprocess_d2h_ms": 9.056808426976204,
+            "total_ms": 63.5920949280262
+          },
+          "memory": {
+            "peak_allocated_mib": 308.56005859375,
+            "peak_reserved_mib": 342.0
+          },
+          "input_shape": [
+            4,
+            32,
+            96,
+            96
+          ]
+        },
+        {
+          "timings": {
+            "preprocess_ms": 1.9570887088775635,
+            "h2d_ms": 2.045178785920143,
+            "inference_ms": 51.13092251121998,
+            "postprocess_d2h_ms": 15.44835977256298,
+            "total_ms": 70.58154977858067
+          },
+          "memory": {
+            "peak_allocated_mib": 308.56005859375,
+            "peak_reserved_mib": 342.0
+          },
+          "input_shape": [
+            4,
+            32,
+            96,
+            96
+          ]
+        },
+        {
+          "timings": {
+            "preprocess_ms": 2.80744768679142,
+            "h2d_ms": 2.6253722608089447,
+            "inference_ms": 50.815023481845856,
+            "postprocess_d2h_ms": 15.581991523504257,
+            "total_ms": 71.82983495295048
+          },
+          "memory": {
+            "peak_allocated_mib": 308.56005859375,
+            "peak_reserved_mib": 342.0
+          },
+          "input_shape": [
+            4,
+            32,
+            96,
+            96
+          ]
+        },
+        {
+          "timings": {
+            "preprocess_ms": 2.277923747897148,
+            "h2d_ms": 0.6620530039072037,
+            "inference_ms": 21.89643494784832,
+            "postprocess_d2h_ms": 8.437084034085274,
+            "total_ms": 33.273495733737946
+          },
+          "memory": {
+            "peak_allocated_mib": 308.56005859375,
+            "peak_reserved_mib": 342.0
+          },
+          "input_shape": [
+            4,
+            32,
+            96,
+            96
+          ]
+        },
+        {
+          "timings": {
+            "preprocess_ms": 2.185339108109474,
+            "h2d_ms": 0.5169548094272614,
+            "inference_ms": 21.914787590503693,
+            "postprocess_d2h_ms": 6.541064009070396,
+            "total_ms": 31.158145517110825
+          },
+          "memory": {
+            "peak_allocated_mib": 308.56005859375,
+            "peak_reserved_mib": 342.0
+          },
+          "input_shape": [
+            4,
+            32,
+            96,
+            96
+          ]
+        },
+        {
+          "timings": {
+            "preprocess_ms": 2.01629102230072,
+            "h2d_ms": 0.4949849098920822,
+            "inference_ms": 21.78020589053631,
+            "postprocess_d2h_ms": 11.07960194349289,
+            "total_ms": 35.371083766222
+          },
+          "memory": {
+            "peak_allocated_mib": 308.56005859375,
+            "peak_reserved_mib": 342.0
+          },
+          "input_shape": [
+            4,
+            32,
+            96,
+            96
+          ]
+        },
+        {
+          "timings": {
+            "preprocess_ms": 2.087121829390526,
+            "h2d_ms": 0.49623288214206696,
+            "inference_ms": 21.873898804187775,
+            "postprocess_d2h_ms": 15.142077580094337,
+            "total_ms": 39.599331095814705
+          },
+          "memory": {
+            "peak_allocated_mib": 308.56005859375,
+            "peak_reserved_mib": 342.0
+          },
+          "input_shape": [
+            4,
+            32,
+            96,
+            96
+          ]
+        }
+      ]
+    }
+  ],
+  "clinical_accuracy": null,
+  "contention": [
+    "0, 4 %, 11559 MiB",
+    "1, 4 %, 11271 MiB"
+  ],
+  "precision_regression": {
+    "kind": "same checkpoint FP32 vs AMP FP16, not two trained model versions",
+    "max_abs_probability_error": 1.246235115104355e-09,
+    "mean_abs_probability_error": 7.376082383769855e-12,
+    "mask_agreement": 1.0,
+    "mask_dice": 1.0,
+    "performance": {
+      "passed": false,
+      "checks": [
+        {
+          "metric": "p50_ms",
+          "baseline": 85.57962998747826,
+          "candidate": 35.97486484795809,
+          "passed": true,
+          "max_relative_increase": 0.2
+        },
+        {
+          "metric": "peak_allocated_mib",
+          "baseline": 180.43017578125,
+          "candidate": 308.56005859375,
+          "passed": false,
+          "max_relative_increase": 0.2
+        }
+      ]
+    },
+    "fp32_foreground_voxels": 0,
+    "fp16_foreground_voxels": 0,
+    "empty_prediction_comparison": true,
+    "quality_note": "Synthetic performance input; empty-mask agreement is not evidence of segmentation accuracy",
+    "foreground_check_scope": "Supplemental replay with identical frozen weights and input hash; original raw latency samples preserved",
+    "foreground_check_utc": "2026-10-08T04:43:06.208302+00:00"
+  }
+}

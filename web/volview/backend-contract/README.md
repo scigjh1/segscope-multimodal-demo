@@ -1,0 +1,153 @@
+# backend-contract
+
+> **Status: private draft `0.x`.** No stability promise; shapes may change any
+> day. The artifact version is the OpenAPI `info.version` in
+> `generated/openapi.json`, mirrored by `package.json` (a drift test keeps them
+> in lockstep). Sole known consumer: girder_volview, which reads this tree from
+> the installed `volview` npm package.
+
+The neutral VolView backend contract: task discovery, inputs, the job
+lifecycle, result intents, and personal job history. No backend speaks these
+shapes natively; each backend translates its own task format into this spec.
+
+To bring a new backend online, implement the [OpenAPI surface](#the-neutral-rest-surface-openapi)
+and validate against the fixtures and generated schemas. Zero VolView client
+change, and no need to read girder_volview source: girder_volview is a
+consumer of this package, not its owner.
+
+## Layout
+
+```
+backend-contract/
+  index.ts            top-level barrel; re-exports ./processing
+  processing/
+    task-spec.ts      VolView's zod task-spec schema
+    wire.ts           neutral wire shapes: input value, staged-input
+                      descriptor, job status, job history, result-intent
+                      vocabulary
+    annotations.ts    the annotations interchange FILE format (rulers,
+                      rectangles, polygons) in world LPS mm
+    openapi.ts        the REST surface as an OpenAPI 3.1 document (wire schemas
+                      injected from the zod codegen)
+    schema-json.ts    zod -> JSON Schema codegen
+    index.ts          re-exports schemas + types (not codegen/openapi)
+    __tests__/        every fixture validates; negatives fail; generated
+                      artifacts stay in sync with the zod source
+  generated/          checked-in *.schema.json (one per wire schema) + openapi.json
+  fixtures/
+    task-spec/        synthetic golden task specs (no backend-native formats;
+                      translation is a backend concern)
+    negative/         payloads that MUST fail validation
+    wire/             input values, job statuses, result intents, job handle,
+                      result-read payloads
+  scripts/
+    generate-json-schema.ts   regenerates generated/*.schema.json
+    generate-openapi.ts       regenerates generated/openapi.json
+```
+
+## The single normative definition
+
+The zod sources are the one normative definition. The golden JSON fixtures are
+the interchange format both sides pin, and the generated JSON Schemas are the
+backend's validator, codegen'd from the zod source so the two can't drift.
+
+Task specs require two validation passes. First validate the generated
+`task-spec.schema.json`, then enforce the cross-field rules implemented by
+`validateTaskSpecSemantics` (or an equivalent implementation in the backend's
+language). Standard JSON Schema cannot compare sibling values such as
+`default <= max`. The annotations interchange file needs the same two passes:
+validate `annotations-file.schema.json`, then enforce
+`validateAnnotationsFileSemantics` — every nonempty `labelName` must be declared
+in its own tool-kind label namespace, which JSON Schema cannot express either.
+Backend conformance tests must also assert that every payload under
+`fixtures/negative/` is rejected by the combined validation path. The one
+exception is `negative/wrong-length-color.json`, which only the strict
+known-intent union rejects: `result-intent.schema.json` is deliberately open,
+so it accepts the row and demotes it to an ordinary result carrying no state
+action.
+
+## The neutral REST surface (OpenAPI)
+
+`generated/openapi.json` (built from `processing/openapi.ts`) describes exactly
+the endpoints the client calls, in neutral terms: no Girder routes, ids, or
+enums.
+
+| operation             | method + path                | request → response                                                                    |
+| --------------------- | ---------------------------- | ------------------------------------------------------------------------------------- |
+| `listTasks`           | `GET /tasks`                 | → `TaskSummary[]`                                                                     |
+| `getTaskSpec`         | `GET /tasks/{taskId}/spec`   | → `TaskSpec`                                                                          |
+| `runTask`             | `POST /tasks/{taskId}/run`   | `RunTaskRequest` → `JobRef`                                                           |
+| `listJobHistory`      | `GET /jobs`                  | → paged `JobHistorySummary[]` (optional)                                              |
+| `getJobHistoryDetail` | `GET /jobs/{jobId}/detail`   | → logs + submitted parameters on demand                                               |
+| `deleteJob`           | `DELETE /jobs/{jobId}`       | → cascading deletion: execution record, results, staged inputs (terminal jobs only; 409 otherwise) |
+| `stageInput`          | `POST /stage`                | parent-bound labelmap or annotations multipart → `StageResponse` (optional)            |
+| `getJob`              | `GET /jobs/{jobId}`          | → `NeutralJobStatus`                                                                  |
+| `getJobResults`       | `GET /jobs/{jobId}/results`  | → result intents, or explicit error                                                   |
+| `cancelJob`           | `POST /jobs/{jobId}/cancel`  | → `NeutralJobStatus`                                                                  |
+
+Notes:
+
+- The lifecycle is poll-only (`getJob`); push (SSE) is an additive backend-only
+  enhancement, not described here.
+- Job-addressed routes are keyed by the opaque job id alone; the job's own
+  access control is the gate, so no context leaks into the path.
+- `JobHistorySummary.outputSummary.recorded` counts declared outputs that
+  recorded and resolve to a readable file; `missing` counts the rest (never
+  recorded, or no longer readable).
+
+## Job-state names
+
+The neutral job states are `pending | running | success | error | cancelled`,
+the names the client store consumes at runtime. A backend-side conformance test
+(girder_volview `tests/test_status_conformance.py`) validates the projected
+status against the generated `neutral-job-status` schema.
+
+## Versioning
+
+Two versions on separate clocks:
+
+- **Artifact version**: `package.json` `version` and the OpenAPI
+  `info.version`, kept in lockstep by `processing/__tests__/openapi.spec.ts`.
+  Versions this package as a published thing.
+- **Shape versions**: `INTENT_VOCABULARY_VERSION` (`processing/wire.ts`) names
+  the shape of the result intent vocabulary in the generated OpenAPI
+  description and in release notes. It never travels on the wire, so adding an
+  intent rests on both sides failing open on a name they do not know. The
+  task-spec `specVersion` does travel: every task spec carries it, and a client
+  rejects a spec whose version it does not know. Bump it only on a shape
+  change, never for a new optional field.
+
+### Result instruction rollout
+
+Contract artifact 0.3.0 uses intent vocabulary 3 and names segmentation import
+`import-segmentation`. A current client still reads the earlier name,
+`add-segment-group`, as the same instruction (`LEGACY_RESULT_INTENT_NAMES` in
+`processing/wire.ts`), so a producer may move to the new name after the client.
+The reverse order does not hold: an older client treats `import-segmentation`
+as an ordinary result and will not apply its segmentation automatically.
+Update Girder's pinned VolView package before the producer emits the new name.
+
+This vocabulary change does not change task-spec versions or saved-session
+schemas. Girder projects stored job outputs into current instructions when
+results are requested; stored output references and mask provenance keep their
+identities.
+
+## Regenerating
+
+```
+npx tsx backend-contract/scripts/generate-json-schema.ts   # rewrite generated/*.schema.json
+npx tsx backend-contract/scripts/generate-openapi.ts       # rewrite generated/openapi.json
+```
+
+Drift guards (`processing/__tests__/generated-schema.spec.ts`,
+`processing/__tests__/openapi.spec.ts`) fail if the checked-in artifacts fall
+out of sync with the zod source.
+
+## How the backend consumes this
+
+The `volview` npm package ships `backend-contract/` in its `files`;
+girder_volview reads fixtures + generated schemas from the installed package
+via its `tests/contract_loader.py`. No vendored copy, no sync step: the
+exact-pinned `volview` version in girder_volview's `web_client/package.json` IS
+the contract pin. For unreleased branches use `npm link` or the
+`GIRDER_VOLVIEW_CONTRACT_DIR` escape hatch (see the loader's docstring).

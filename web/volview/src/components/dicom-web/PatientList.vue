@@ -1,0 +1,92 @@
+<script lang="ts">
+import { computed, defineComponent, ref, watch } from 'vue';
+
+import { useDicomWebStore } from '@/src/store/dicom-web/dicom-web-store';
+import { useDicomMetaStore } from '@/src/store/dicom-web/dicom-meta-store';
+
+import PatientDetails from './PatientDetails.vue';
+
+export default defineComponent({
+  components: {
+    PatientDetails,
+  },
+  setup() {
+    const dicomWebStore = useDicomWebStore();
+    const dicomWebMeta = useDicomMetaStore();
+    dicomWebStore.fetchDicomsOnce();
+
+    const patients = computed(() =>
+      Object.values(dicomWebMeta.patientInfo)
+        .map((info) => ({
+          key: info.PatientID,
+          name: info.PatientName,
+        }))
+        .sort((a, b) => (a.name < b.name ? -1 : 1))
+    );
+
+    const patientKeys = computed(() => patients.value.map(({ key }) => key));
+    const panels = ref<string[]>([]);
+
+    watch(
+      patientKeys,
+      (keys) => {
+        if (dicomWebStore.linkedToStudyOrSeries)
+          panels.value = Array.from(new Set([...panels.value, ...keys]));
+      },
+      { immediate: true }
+    );
+
+    return {
+      patients,
+      dicomWebStore,
+      panels,
+    };
+  },
+});
+</script>
+
+<template>
+  <p v-if="dicomWebStore.message.length > 0" class="error-message">
+    {{ dicomWebStore.message }}
+  </p>
+
+  <v-expansion-panels
+    v-else-if="patients.length > 0"
+    v-model="panels"
+    multiple
+    accordion
+  >
+    <v-expansion-panel
+      v-for="patient in patients"
+      :key="patient.key"
+      :value="patient.key"
+    >
+      <v-expansion-panel-title>
+        <div class="patient-header">
+          <v-icon class="collection-header-icon">mdi-account</v-icon>
+          <span class="patient-header-name" :title="patient.name">
+            {{ patient.name }}
+          </span>
+        </div>
+      </v-expansion-panel-title>
+      <v-expansion-panel-text>
+        <patient-details :patient-key="patient.key" />
+      </v-expansion-panel-text>
+    </v-expansion-panel>
+  </v-expansion-panels>
+</template>
+
+<style scoped>
+.v-expansion-panel--active:not(:first-child):after {
+  opacity: 100;
+}
+
+.v-expansion-panel--active + .v-expansion-panel::after {
+  opacity: 100;
+}
+
+.error-message {
+  margin-top: 1em;
+  color: red;
+}
+</style>

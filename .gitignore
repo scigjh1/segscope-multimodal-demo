@@ -1,4 +1,5 @@
 .venv/
+.venv-gpu/
 __pycache__/
 *.pyc
 .env
@@ -24,3 +25,9 @@ outputs/
 *.onnx
 *.pem
 *.key
+
+web/volview/node_modules/
+web/volview/dist/
+web/volview/.env*
+web/volview/.tmp/
+web/volview/.cache/

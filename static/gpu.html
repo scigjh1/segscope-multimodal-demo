@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="zh-CN" data-bs-theme="light">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>SegScope AI · GPU 医学影像工作台</title><link rel="icon" href="data:,">
+<link rel="stylesheet" href="/vendor/tabler.min.css"><link rel="stylesheet" href="/gpu.css"></head>
+<body><div class="page">
+<header class="navbar navbar-expand-md"><div class="container-fluid">
+  <a class="navbar-brand fw-bold" href="/">SegScope</a>
+  <div class="navbar-nav flex-row gap-3"><a class="nav-link" href="/volview/">阅片工作台</a><a class="nav-link active" href="/gpu.html">GPU 推理</a><a class="nav-link" href="http://127.0.0.1:4188/">实验评测</a></div>
+  <span class="badge bg-secondary-lt" id="deviceBadge">连接 Runtime…</span>
+</div></header>
+<div class="page-wrapper"><div class="container-fluid py-3">
+<div class="page-header mb-3"><div class="row align-items-center"><div class="col"><h1 class="page-title">病例推理与复核</h1></div><div class="col-auto"><a class="btn" href="/volview/">打开 VolView</a></div></div></div>
+<div id="notice" class="alert alert-secondary py-2" role="status">正在获取设备与模型信息。</div>
+<section id="workbench" class="workspace">
+<aside class="card"><div class="card-header"><h2 class="card-title">病例与推理配置</h2></div><div class="card-body">
+  <button id="phantom" class="btn btn-primary w-100 mb-2">载入三维 CT 合成样例</button>
+  <label class="btn w-100 mb-3">导入 NIfTI / DICOM / PNG<input id="upload" class="d-none" type="file" accept=".nii,.gz,.dcm,.dicom,.zip,.png,.jpg,.jpeg"></label>
+  <label class="form-label">病例 / Study / Series</label><select id="caseSelect" class="form-select mb-3"></select>
+  <div id="caseMeta" class="meta-box mb-3">选择病例开始复核</div>
+  <label class="form-label">模型 Adapter</label><select id="model" class="form-select mb-3"></select>
+  <div class="row"><div class="col-7"><label class="form-label">设备</label><select id="device" class="form-select"></select></div><div class="col-5"><label class="form-label">精度</label><select id="precision" class="form-select"><option value="fp32">FP32</option><option value="fp16">AMP FP16</option></select></div></div>
+  <div class="row mt-3"><div class="col-8"><label class="form-label">滑窗 ROI · Z / Y / X</label><input id="roi" class="form-control" value="32,96,96"></div><div class="col-4"><label class="form-label">窗批量</label><input id="batch" class="form-control" type="number" min="1" max="8" value="1"></div></div>
+  <button id="infer" class="btn btn-primary w-100 mt-3" disabled>运行模型推理</button>
+  <button id="batchInfer" class="btn w-100 mt-2" disabled>批量运行病例（最多 8 例）</button>
+  <div class="mt-3 text-secondary small">DICOM 仅接受规则间距单序列；Patient 标签不进入界面。无参考标注时不显示 Dice / FP / FN。</div>
+</div></aside>
+<article class="card viewer-card"><div class="card-header"><h2 class="card-title">影像与 AI 结果</h2><div class="ms-auto"><span class="badge bg-azure-lt">NiiVue · 三视图 / 3D / 编辑</span></div></div>
+  <div class="viewer-actions"><button class="btn btn-sm" data-layer="original">原始影像</button><button class="btn btn-sm" data-layer="mask">AI Mask</button><button class="btn btn-sm" data-layer="probability">概率图</button><button class="btn btn-sm" data-layer="uncertainty">不确定性</button><button id="editMask" class="btn btn-sm">编辑轮廓</button></div>
+  <iframe id="viewer" title="NiiVue 医学影像三视图" allow="fullscreen"></iframe>
+  <div class="card-footer text-secondary small">鼠标定位三视图；使用 Draw 菜单绘制/擦除、撤销。编辑后的掩膜保留原始空间。</div>
+</article>
+<aside class="card"><div class="card-header"><h2 class="card-title">结果与人机复核</h2></div><div class="card-body">
+  <div class="result-grid"><div><span>Runtime 延迟</span><strong id="latency">—</strong></div><div><span>峰值显存</span><strong id="vram">—</strong></div><div><span>Dice / HD95</span><strong id="quality">—</strong></div><div><span>前景体积</span><strong id="volume">—</strong></div></div>
+  <div id="stages" class="mt-3"></div><div id="runMeta" class="text-secondary small mt-3">尚无模型结果</div>
+  <hr><label class="form-label">复核操作</label><div class="d-flex gap-2"><button id="accept" class="btn btn-success flex-fill" disabled>Accept</button><button id="reject" class="btn btn-danger flex-fill" disabled>Reject</button></div>
+  <button id="saveDraw" class="btn w-100 mt-2" disabled>导出当前修订 Mask</button>
+  <label class="btn w-100 mt-2">上传修订并记录 Edit<input id="correction" class="d-none" type="file" accept=".nii,.gz"></label>
+  <label class="form-label mt-3">失败原因</label><select id="taxonomy" class="form-select"><option value="boundary_deviation">边界偏差</option><option value="small_lesion_miss">小前景漏检</option><option value="remote_fp">远端 FP</option><option value="low_contrast">低对比失败</option><option value="other">其他</option></select>
+  <div class="mt-3"><strong>优先复核区域</strong><div id="regions" class="region-list mt-2">运行后生成不确定区域列表</div></div>
+</div></aside>
+</section>
+<section id="benchmark" class="d-none"><div class="card"><div class="card-header"><h2 class="card-title">CPU / GPU / AMP 实测</h2><button class="btn ms-auto" id="exportBench">导出原始 JSON</button></div><div class="card-body"><div id="benchMeta"></div><div id="benchCards" class="benchmark-cards my-3"></div><div class="table-responsive"><table class="table table-vcenter"><thead><tr><th>设备 / 精度</th><th>P50</th><th>P95</th><th>吞吐</th><th>峰值 VRAM</th><th>相对 CPU</th></tr></thead><tbody id="benchRows"></tbody></table></div><div id="regression" class="mt-3"></div><div id="protocol" class="text-secondary small mt-3"></div></div></div></section>
+<section class="card mt-3"><div class="card-header"><h2 class="card-title">病例运行与修订回流</h2><button id="refresh" class="btn btn-sm ms-auto">刷新</button></div><div class="table-responsive"><table class="table table-vcenter"><thead><tr><th>Run / Case</th><th>模型 / 精度</th><th>推理耗时</th><th>Dice</th><th>风险比例</th><th>复核状态</th><th>结果</th></tr></thead><tbody id="runRows"></tbody></table></div><div class="card-footer" id="errorPool">困难样本池：0 条</div></section>
+</div><footer class="footer py-2"><div class="container-fluid text-secondary small">Research Workbench · NiiVue (BSD-2-Clause) + Tabler (MIT) · 指标来自当前运行或保存的原始 benchmark；合成样例不代表临床精度。</div></footer></div></div>
+<script type="module" src="/gpu.js"></script></body></html>

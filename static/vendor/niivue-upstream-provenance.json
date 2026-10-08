@@ -1,0 +1,13 @@
+{
+  "repository": "https://github.com/niivue/niivue",
+  "source_file": "packages/niivue/demos/features/draw.ui.html",
+  "source_commit": "2a060d5f64a15094a5147f3eae42d3382333f206",
+  "modifications": [
+    "Local bundled UMD import",
+    "Anonymous local volume endpoint",
+    "Same-origin inference/drawing bridge",
+    "Dark header theme",
+    "Disable remote example datasets"
+  ],
+  "license": "BSD-2-Clause"
+}

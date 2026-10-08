@@ -1,0 +1,48 @@
+import express from 'express';
+import cors from 'cors';
+import { readFileSync } from 'fs';
+import { join } from 'path';
+import { TEMP_DIR } from '../../wdio.shared.conf';
+import { AUX_PORT } from '../e2ePorts';
+import { CT_ELECTRODES } from '../datasets';
+
+export function createContentDispositionServer() {
+  const app = express();
+
+  app.use(
+    cors({
+      origin: '*',
+      exposedHeaders: ['Content-Disposition'],
+    })
+  );
+
+  app.get('/scan', (req, res) => {
+    const filePath = join(TEMP_DIR, CT_ELECTRODES.name);
+    const fileBuffer = readFileSync(filePath);
+
+    res.setHeader('Content-Type', 'application/octet-stream');
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="${CT_ELECTRODES.name}"`
+    );
+    res.send(fileBuffer);
+  });
+
+  return app;
+}
+
+export function startServer() {
+  const app = createContentDispositionServer();
+  return app.listen(AUX_PORT, () => {
+    console.log(`Content-Disposition test server running on port ${AUX_PORT}`);
+  });
+}
+
+export function stopServer(server: ReturnType<typeof startServer>) {
+  return new Promise<void>((resolve) => {
+    server.close(() => {
+      console.log('Content-Disposition test server stopped');
+      resolve();
+    });
+  });
+}

@@ -1,0 +1,266 @@
+import type { TypedArray } from '@kitware/vtk.js/types';
+
+/** vtk.js index-space extent order: [iMin, iMax, jMin, jMax, kMin, kMax]. */
+export type Extent3D = [number, number, number, number, number, number];
+
+/** Widens `box` in place to take in one more index. */
+export const growExtent = (box: Extent3D, i: number, j: number, k: number) => {
+  box[0] = Math.min(box[0], i);
+  box[1] = Math.max(box[1], i);
+  box[2] = Math.min(box[2], j);
+  box[3] = Math.max(box[3], j);
+  box[4] = Math.min(box[4], k);
+  box[5] = Math.max(box[5], k);
+};
+
+export function emptyExtent(): Extent3D {
+  return [0, -1, 0, -1, 0, -1];
+}
+
+/** vtk.js extents are inclusive, so an axis is empty only when max < min. */
+export function isEmptyExtent(extent: Extent3D) {
+  return (
+    extent[1] < extent[0] || extent[3] < extent[2] || extent[5] < extent[4]
+  );
+}
+
+/** Voxel counts along i, j, k. Meaningless for an empty extent. */
+export function extentSize(extent: Extent3D) {
+  return [
+    extent[1] - extent[0] + 1,
+    extent[3] - extent[2] + 1,
+    extent[5] - extent[4] + 1,
+  ] as [number, number, number];
+}
+
+export function extentContains(outer: Extent3D, inner: Extent3D) {
+  return (
+    inner[0] >= outer[0] &&
+    inner[1] <= outer[1] &&
+    inner[2] >= outer[2] &&
+    inner[3] <= outer[3] &&
+    inner[4] >= outer[4] &&
+    inner[5] <= outer[5]
+  );
+}
+
+export function extentContainsIndex(
+  extent: Extent3D,
+  i: number,
+  j: number,
+  k: number
+) {
+  return (
+    i >= extent[0] &&
+    i <= extent[1] &&
+    j >= extent[2] &&
+    j <= extent[3] &&
+    k >= extent[4] &&
+    k <= extent[5]
+  );
+}
+
+/** The two axes a slice along `axis` spans, in index order. */
+export const inPlaneAxes = (axis: number) =>
+  [0, 1, 2].filter((other) => other !== axis) as [number, number];
+
+/**
+ * The box one plane thick at `slice` along `axis`, spanning on each in-plane
+ * axis what `span` gives it, which is asked in index order.
+ */
+export function sliceExtent(
+  axis: number,
+  slice: number,
+  span: (inPlane: number, planeIndex: number) => [number, number]
+) {
+  const extent: Extent3D = [0, 0, 0, 0, 0, 0];
+  extent[axis * 2] = slice;
+  extent[axis * 2 + 1] = slice;
+  inPlaneAxes(axis).forEach((inPlane, planeIndex) => {
+    [extent[inPlane * 2], extent[inPlane * 2 + 1]] = span(inPlane, planeIndex);
+  });
+  return extent;
+}
+
+/** Whether the plane at `slice` along `axis` passes through `extent`. */
+export const extentReachesSlice = (
+  extent: Extent3D,
+  axis: number,
+  slice: number
+) => slice >= extent[axis * 2] && slice <= extent[axis * 2 + 1];
+
+/** A mask's extent with the row and plane strides that extent implies. */
+export type MaskBounds = {
+  extent: Extent3D;
+  mi: number;
+  mj: number;
+};
+
+/** Where a parent-index voxel sits in the buffer of a mask bounded that way. */
+export const maskOffset = (
+  bounds: MaskBounds,
+  i: number,
+  j: number,
+  k: number
+) =>
+  i -
+  bounds.extent[0] +
+  (j - bounds.extent[2]) * bounds.mi +
+  (k - bounds.extent[4]) * bounds.mi * bounds.mj;
+
+/**
+ * Copies a mask onto another extent of its parent grid, padding with zero.
+ * An output buffer must match the destination size and not alias the source.
+ */
+export function reframeMaskScalars(
+  scalars: TypedArray | number[],
+  from: Extent3D,
+  to: Extent3D,
+  output?: Uint8Array
+) {
+  const [mi, mj, mk] = extentSize(to);
+  const size = isEmptyExtent(to) ? 0 : mi * mj * mk;
+  const values = output ?? new Uint8Array(size);
+  if (values.length !== size) throw new Error('Mask output size mismatch');
+  if (output) values.fill(0);
+  const shared = clipExtent(from, to);
+  if (isEmptyExtent(shared)) return values;
+  const [si, sj] = extentSize(from);
+  // Bounds can be reactive; read them once before the per-row copy loop.
+  const source = { extent: [...from] as Extent3D, mi: si, mj: sj };
+  const destination = { extent: [...to] as Extent3D, mi, mj };
+  const count = shared[1] - shared[0] + 1;
+  for (let k = shared[4]; k <= shared[5]; k += 1) {
+    for (let j = shared[2]; j <= shared[3]; j += 1) {
+      const start = maskOffset(source, shared[0], j, k);
+      const end = maskOffset(destination, shared[0], j, k);
+      if (count === 1) {
+        values[end] = scalars[start];
+      } else {
+        const row = Array.isArray(scalars)
+          ? scalars.slice(start, start + count)
+          : scalars.subarray(start, start + count);
+        values.set(row, end);
+      }
+    }
+  }
+  return values;
+}
+
+/**
+ * Walks `extent` one row along i at a time, handing each row its j and k and
+ * its position among the rows. Stops at the first row answering true and says
+ * whether one did. One flat loop, so no caller nests a j and a k loop.
+ */
+export function walkExtentRows(
+  extent: Extent3D,
+  visit: (j: number, k: number, row: number) => boolean | void
+) {
+  const [, nj, nk] = extentSize(extent);
+  for (let row = 0; row < nj * nk; row += 1) {
+    if (visit(extent[2] + (row % nj), extent[4] + Math.floor(row / nj), row))
+      return true;
+  }
+  return false;
+}
+
+/**
+ * The box the claimed voxels actually occupy inside a mask bounded by
+ * `extent`, empty when it claims nothing. A binding's extent is the
+ * allocation, padded and never shrunk by an erase, so it is not the segment's
+ * bounds. Background is 0, so a claimed voxel is a truthy one.
+ */
+export function markedExtent(scalars: ArrayLike<number>, extent: Extent3D) {
+  const [ni] = extentSize(extent);
+  let bounds: Extent3D | undefined;
+
+  const scanRow = (rowStart: number, j: number, k: number) => {
+    for (let index = 0; index < ni; index += 1) {
+      if (!scalars[rowStart + index]) continue;
+      const i = extent[0] + index;
+      if (bounds) growExtent(bounds, i, j, k);
+      else bounds = [i, i, j, j, k, k];
+    }
+  };
+
+  walkExtentRows(extent, (j, k, row) => scanRow(row * ni, j, k));
+  return bounds ?? emptyExtent();
+}
+
+/** Whether any voxel is claimed, stopping at the first one found. */
+export function hasMarkedVoxel(scalars: ArrayLike<number>) {
+  for (let offset = 0; offset < scalars.length; offset += 1) {
+    if (scalars[offset]) return true;
+  }
+  return false;
+}
+
+/** The parent-image slice indices holding a claimed voxel, for i, j and k. */
+export function markedSlices(scalars: ArrayLike<number>, extent: Extent3D) {
+  const [ni, nj] = extentSize(extent);
+  const occupied = [new Set<number>(), new Set<number>(), new Set<number>()];
+
+  for (let offset = 0; offset < scalars.length; offset += 1) {
+    if (!scalars[offset]) continue;
+    const i = extent[0] + (offset % ni);
+    const row = Math.floor(offset / ni);
+    const j = extent[2] + (row % nj);
+    const k = extent[4] + Math.floor(row / nj);
+    occupied[0].add(i);
+    occupied[1].add(j);
+    occupied[2].add(k);
+  }
+
+  return occupied.map((slices) => [...slices]) as [
+    number[],
+    number[],
+    number[],
+  ];
+}
+
+export function extentUnion(a: Extent3D, b: Extent3D): Extent3D {
+  return [
+    Math.min(a[0], b[0]),
+    Math.max(a[1], b[1]),
+    Math.min(a[2], b[2]),
+    Math.max(a[3], b[3]),
+    Math.min(a[4], b[4]),
+    Math.max(a[5], b[5]),
+  ];
+}
+
+/** Grows `extent` by `padding` voxels on every side, or by one per axis. */
+export function padExtent(
+  extent: Extent3D,
+  padding: number | readonly number[]
+): Extent3D {
+  const [pi, pj, pk] =
+    typeof padding === 'number' ? [padding, padding, padding] : padding;
+  return [
+    extent[0] - pi,
+    extent[1] + pi,
+    extent[2] - pj,
+    extent[3] + pj,
+    extent[4] - pk,
+    extent[5] + pk,
+  ];
+}
+
+/** `extent` in the index space of a buffer that covers `frame`. */
+export const extentWithin = (extent: Extent3D, frame: Extent3D) =>
+  extent.map((value, index) => value - frame[index - (index % 2)]) as Extent3D;
+
+export function clipExtent(extent: Extent3D, bounds: Extent3D): Extent3D {
+  return [
+    Math.max(extent[0], bounds[0]),
+    Math.min(extent[1], bounds[1]),
+    Math.max(extent[2], bounds[2]),
+    Math.min(extent[3], bounds[3]),
+    Math.max(extent[4], bounds[4]),
+    Math.min(extent[5], bounds[5]),
+  ];
+}
+
+export function fullExtent(dimensions: ArrayLike<number>): Extent3D {
+  return [0, dimensions[0] - 1, 0, dimensions[1] - 1, 0, dimensions[2] - 1];
+}

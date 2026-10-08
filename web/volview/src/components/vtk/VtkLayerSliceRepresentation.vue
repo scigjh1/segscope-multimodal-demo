@@ -1,0 +1,109 @@
+<script setup lang="ts">
+import { toRefs, watchEffect, inject, computed, onScopeDispose } from 'vue';
+import { useImage } from '@/src/composables/useCurrentImage';
+import { useSliceRepresentation } from '@/src/core/vtk/useSliceRepresentation';
+import { LPSAxis } from '@/src/types/lps';
+import { SlicingMode } from '@kitware/vtk.js/Rendering/Core/ImageMapper/Constants';
+import { VtkViewContext } from '@/src/components/vtk/context';
+import vtkColorTransferFunction from '@kitware/vtk.js/Rendering/Core/ColorTransferFunction';
+import vtkPiecewiseFunction from '@kitware/vtk.js/Common/DataModel/PiecewiseFunction';
+import { vtkFieldRef } from '@/src/core/vtk/vtkFieldRef';
+import { syncRef } from '@vueuse/core';
+import { useSliceConfig } from '@/src/composables/useSliceConfig';
+import useLayerColoringStore from '@/src/store/view-configs/layers';
+import { applyColoring } from '@/src/composables/useColoringEffect';
+import { useImageCacheStore } from '@/src/store/image-cache';
+
+interface Props {
+  viewId: string;
+  layerId: string;
+  parentId: string;
+  axis: LPSAxis;
+}
+
+const props = defineProps<Props>();
+const { viewId, layerId, parentId, axis } = toRefs(props);
+
+const view = inject(VtkViewContext);
+if (!view) throw new Error('No VtkView');
+
+const coloringStore = useLayerColoringStore();
+const coloringConfig = computed(() =>
+  coloringStore.getConfig(viewId.value, layerId.value)
+);
+
+// setup slice rep
+const imageCacheStore = useImageCacheStore();
+const imageData = computed(() =>
+  imageCacheStore.getVtkImageData(layerId.value)
+);
+const sliceRep = useSliceRepresentation(view, imageData);
+
+const ownedColorTransferFunction = vtkColorTransferFunction.newInstance();
+const ownedOpacityFunction = vtkPiecewiseFunction.newInstance();
+sliceRep.property.setRGBTransferFunction(0, ownedColorTransferFunction);
+sliceRep.property.setScalarOpacity(0, ownedOpacityFunction);
+onScopeDispose(() => {
+  ownedColorTransferFunction.delete();
+  ownedOpacityFunction.delete();
+});
+sliceRep.property.setUseLookupTableScalarRange(false);
+
+// set slice ordering to be in front of the segmentations
+sliceRep.mapper.setResolveCoincidentTopologyToPolygonOffset();
+sliceRep.mapper.setRelativeCoincidentTopologyPolygonOffsetParameters(-2, -2);
+
+// set slicing mode
+const { metadata: parentMetadata } = useImage(parentId);
+
+watchEffect(() => {
+  const { lpsOrientation } = parentMetadata.value;
+  const ijkIndex = lpsOrientation[axis.value];
+  const mode = [SlicingMode.I, SlicingMode.J, SlicingMode.K][ijkIndex];
+  sliceRep.mapper.setSlicingMode(mode);
+});
+
+// sync slicing
+const slice = vtkFieldRef(sliceRep.mapper, 'slice');
+const { slice: storedSlice } = useSliceConfig(viewId, parentId);
+syncRef(storedSlice, slice, { immediate: true });
+
+// apply layer coloring
+const applyLayerColoring = () => {
+  const config = coloringConfig.value;
+  if (!config) return;
+
+  const cfun = sliceRep.property.getRGBTransferFunction(0);
+  const ofun = sliceRep.property.getPiecewiseFunction(0);
+
+  if (!cfun || !ofun) throw new Error('Missing transfer functions');
+
+  applyColoring({
+    props: {
+      colorFunction: config.transferFunction,
+      opacityFunction: config.opacityFunction,
+    },
+    cfun,
+    ofun,
+  });
+
+  const { opacityFunction } = config;
+
+  const { mappingRange } = opacityFunction;
+  const width = mappingRange[1] - mappingRange[0];
+  const center = (mappingRange[1] + mappingRange[0]) / 2;
+
+  sliceRep.property.setColorWindow(width);
+  sliceRep.property.setColorLevel(center);
+  sliceRep.property.setOpacity(config.blendConfig.opacity);
+  sliceRep.actor.setVisibility(config.blendConfig.visibility);
+};
+
+watchEffect(applyLayerColoring);
+
+defineExpose(sliceRep);
+</script>
+
+<template>
+  <slot></slot>
+</template>
