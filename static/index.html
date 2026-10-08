@@ -1,0 +1,196 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="SegScope 多模态图像分割工作台" />
+    <title>SegScope 多模态图像分割工作台</title>
+    <link rel="icon" href="data:," />
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">
+        <div class="brand-mark" aria-hidden="true">SS</div>
+        <div>
+          <strong>SegScope</strong>
+          <span>多模态图像分割工作台</span>
+        </div>
+      </div>
+      <div class="topbar-actions">
+        <span class="engine-status" id="engineStatus"><span></span>连接引擎</span>
+        <button class="icon-button" id="resetButton" type="button" title="重置工作台" aria-label="重置工作台">
+          <i data-lucide="rotate-ccw"></i>
+        </button>
+        <a class="button secondary" href="/README.md" target="_blank" rel="noreferrer">
+          <i data-lucide="file-text"></i>项目文档
+        </a>
+      </div>
+    </header>
+
+    <main class="page-shell">
+      <section class="page-heading">
+        <div>
+          <p class="eyebrow">WORKSPACE / SEGMENTATION</p>
+          <h1>分割实验工作台</h1>
+        </div>
+        <div class="run-meta">
+          <span id="runId">RUN-0000</span>
+          <span id="runState" class="status neutral">待运行</span>
+        </div>
+      </section>
+
+      <section class="workspace-grid">
+        <aside class="control-panel" aria-label="实验参数">
+          <div class="section-heading">
+            <div>
+              <span class="step">01</span>
+              <h2>输入数据</h2>
+            </div>
+            <button class="text-button" id="sampleButton" type="button">
+              <i data-lucide="image-plus"></i>载入样例
+            </button>
+          </div>
+          <button class="text-button" id="phantomButton" type="button">载入合成切片（无患者数据）</button>
+
+          <label class="file-field" for="imageInput">
+            <span><i data-lucide="image"></i>主图像</span>
+            <strong id="imageFileName">未选择</strong>
+            <input id="imageInput" type="file" accept="image/png,image/jpeg,image/webp" />
+          </label>
+          <label class="file-field" for="auxInput">
+            <span><i data-lucide="layers-3"></i>辅助模态</span>
+            <strong id="auxFileName">可选</strong>
+            <input id="auxInput" type="file" accept="image/png,image/jpeg,image/webp" />
+          </label>
+
+          <div class="control-section">
+            <div class="section-heading compact">
+              <div><span class="step">02</span><h2>推理设置</h2></div>
+            </div>
+            <label class="field-label" for="fusionWeight">
+              <span>辅助模态权重</span>
+              <output id="fusionWeightValue">35%</output>
+            </label>
+            <input id="fusionWeight" class="range-input" type="range" min="0" max="75" value="35" step="5" />
+
+            <label class="field-label" for="iterations"><span>GrabCut 迭代</span></label>
+            <select id="iterations" class="select-input">
+              <option value="3" selected>3 次</option>
+              <option value="5">5 次</option>
+              <option value="8">8 次</option>
+            </select>
+            <label class="field-label" for="mode"><span>推理模式</span></label>
+            <select id="mode" class="select-input">
+              <option value="private" disabled>私有研究模型（需本机配置）</option>
+              <option value="fast" selected>快速模式</option>
+              <option value="precise">精细模式</option>
+            </select>
+          </div>
+
+          <div class="control-section">
+            <div class="section-heading compact">
+              <div><span class="step">03</span><h2>目标区域</h2></div>
+              <button class="icon-button small" id="clearRoiButton" type="button" title="清除框选" aria-label="清除框选">
+                <i data-lucide="square-dashed"></i>
+              </button>
+            </div>
+            <dl class="roi-values">
+              <div><dt>X</dt><dd id="roiX">-</dd></div>
+              <div><dt>Y</dt><dd id="roiY">-</dd></div>
+              <div><dt>W</dt><dd id="roiW">-</dd></div>
+              <div><dt>H</dt><dd id="roiH">-</dd></div>
+            </dl>
+          </div>
+
+          <button class="button primary run-button" id="runButton" type="button">
+            <i data-lucide="play"></i>运行分割
+          </button>
+        </aside>
+
+        <section class="canvas-panel">
+          <div class="panel-toolbar">
+            <div>
+              <h2>输入视图</h2>
+              <span id="imageDimensions">840 × 540</span>
+            </div>
+            <div class="segmented-control" role="group" aria-label="输入视图切换">
+              <button class="active" type="button" data-input-view="rgb">主图像</button>
+              <button type="button" data-input-view="aux">辅助模态</button>
+            </div>
+          </div>
+          <div class="canvas-wrap">
+            <canvas id="inputCanvas" width="840" height="540"></canvas>
+            <div class="empty-state" id="canvasEmpty">
+              <i data-lucide="scan-line"></i>
+              <strong>等待图像</strong>
+            </div>
+          </div>
+          <div class="canvas-footer">
+            <span><i data-lucide="mouse-pointer-2"></i>ROI 框选</span>
+            <span id="pipelineLabel">OpenCV GrabCut</span>
+          </div>
+        </section>
+
+        <section class="result-panel">
+          <div class="panel-toolbar">
+            <div>
+              <h2>分割结果</h2>
+              <span id="resultState">暂无结果</span>
+            </div>
+            <button class="icon-button" id="downloadButton" type="button" title="下载当前结果" aria-label="下载当前结果" disabled>
+              <i data-lucide="download"></i>
+            </button>
+          </div>
+          <div class="result-stage">
+            <img id="resultImage" alt="图像分割结果" />
+            <div class="empty-state" id="resultEmpty">
+              <i data-lucide="panels-top-left"></i>
+              <strong>运行后显示结果</strong>
+            </div>
+          </div>
+          <div class="segmented-control result-tabs" role="tablist" aria-label="结果视图切换">
+            <button class="active" type="button" data-result-view="overlay">叠加图</button>
+            <button type="button" data-result-view="fusedMask">融合掩膜</button>
+            <button type="button" data-result-view="primaryMask">单模态掩膜</button>
+          </div>
+        </section>
+      </section>
+
+      <section class="metrics-section" aria-label="本次运行指标">
+        <article class="metric-card">
+          <span>端到端延迟</span><strong id="metricLatency">-</strong><small>ms</small>
+        </article>
+        <article class="metric-card">
+          <span>等效吞吐</span><strong id="metricFps">-</strong><small>FPS</small>
+        </article>
+        <article class="metric-card">
+          <span>前景占比</span><strong id="metricArea">-</strong><small>%</small>
+        </article>
+        <article class="metric-card">
+          <span>连通区域</span><strong id="metricComponents">-</strong><small>个</small>
+        </article>
+        <article class="metric-card">
+          <span>融合一致性</span><strong id="metricAgreement">-</strong><small>% IoU</small>
+        </article>
+      </section>
+
+      <section class="history-section">
+        <div class="section-heading">
+          <div><span class="step">04</span><h2>实验记录</h2></div>
+          <button class="text-button" id="clearHistoryButton" type="button"><i data-lucide="trash-2"></i>清空</button>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>运行编号</th><th>输入尺寸</th><th>模态</th><th>迭代</th><th>延迟</th><th>FPS</th><th>前景占比</th></tr></thead>
+            <tbody id="historyBody"><tr><td colspan="7" class="empty-row">暂无实验记录</td></tr></tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+
+    <div class="toast" id="toast" role="status" aria-live="polite"></div>
+    <script src="/vendor/lucide.min.js"></script>
+    <script src="/app.js" defer></script>
+  </body>
+</html>

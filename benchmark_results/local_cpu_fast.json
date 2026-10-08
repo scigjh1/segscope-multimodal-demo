@@ -1,0 +1,37 @@
+{
+  "timestampUtc": "2026-09-23T03:53:51.915454+00:00",
+  "environment": {
+    "os": "Windows-11-10.0.26200-SP0",
+    "processor": "AMD64 Family 25 Model 80 Stepping 0, AuthenticAMD",
+    "python": "3.12.14",
+    "opencv": "4.12.0",
+    "numpy": "2.2.6",
+    "device": "CPU"
+  },
+  "protocol": {
+    "inputWidth": 840,
+    "inputHeight": 540,
+    "warmupRuns": 10,
+    "measuredRuns": 100,
+    "grabCutIterations": 3,
+    "mode": "fast",
+    "fusionWeight": 0.35,
+    "scope": "JSON-ready end-to-end function including decode, segmentation, fusion, metrics and PNG encode"
+  },
+  "latencyMs": {
+    "mean": 56.83,
+    "median": 56.03,
+    "p95": 64.71,
+    "min": 49.91,
+    "max": 70.1
+  },
+  "throughputFps": 17.6,
+  "engineReportedMeanMs": 51.7,
+  "sampleOutput": {
+    "processingMs": 53,
+    "areaRatio": 16.3,
+    "components": 3,
+    "boundaryLength": 985.2,
+    "agreement": 100.0
+  }
+}
